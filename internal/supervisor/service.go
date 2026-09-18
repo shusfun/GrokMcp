@@ -184,7 +184,13 @@ func (s *Service) Close() error {
 }
 
 func (s *Service) goWatch(fn func()) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	s.watchers.Add(1)
+	s.mu.Unlock()
 	go func() {
 		defer s.watchers.Done()
 		fn()

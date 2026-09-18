@@ -149,7 +149,10 @@ func (s *Service) skipPump(job protocol.Job, reason string, queueLength int) {
 }
 
 func (s *Service) maybeAttachDesired(jobID string) {
-	if !s.isIdle(jobID) {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed || !s.isIdle(jobID) {
 		return
 	}
 	job, err := s.load(jobID)

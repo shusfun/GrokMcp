@@ -843,6 +843,16 @@ func TestDispatchHeadedStillStartsPlan(t *testing.T) {
 	if j.State == protocol.StatePlanning && j.ViewMode == protocol.ViewHeaded && j.InputOwner == protocol.OwnerTUI && !j.Busy {
 		t.Fatalf("stuck headed without plan: %+v", j)
 	}
+	done := make(chan error, 1)
+	go func() { done <- s.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close hung after headed dispatch")
+	}
 }
 
 func TestPumpTraceContainsSkipReason(t *testing.T) {

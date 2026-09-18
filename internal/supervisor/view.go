@@ -111,6 +111,12 @@ func (s *Service) attachWhenIdle(jobID string, gen uint64) {
 }
 
 func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (protocol.Job, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return s.decorate(job), errors.New("supervisor closed")
+	}
+	s.mu.Unlock()
 	rt := s.runtime(job.JobID)
 	s.mu.Lock()
 	existing := rt.term
@@ -137,6 +143,11 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (protocol.Job
 		return s.decorate(job), err
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = h.Close()
+		return s.decorate(job), errors.New("supervisor closed")
+	}
 	rt.term = h
 	rt.attachGen++
 	gen := rt.attachGen
