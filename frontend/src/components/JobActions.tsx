@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Copy, FolderOpen, MoreHorizontal } from "lucide-react";
-import type { Job } from "../lib/jobs";
+import { canControlTurn, type Job } from "../lib/jobs";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { DropdownItem, DropdownMenu } from "./ui/dropdown-menu";
@@ -20,6 +20,7 @@ export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, o
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const planReady = job.state === "plan_ready";
+  const turnControl = canControlTurn(job);
   const run = (fn: () => void | Promise<void>) => {
     if (busy) return;
     setBusy(true);
@@ -44,7 +45,7 @@ export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, o
         ) : (
           <Button size="sm" disabled={busy} onClick={() => run(onShowTui)}>显示 TUI</Button>
         )}
-        {!planReady ? (
+        {turnControl ? (
           <>
             <Button size="sm" variant="danger" disabled={busy} onClick={() => run(onCancel)}>取消当前 turn</Button>
             <Button size="sm" variant="outline" disabled={busy} onClick={() => run(onContinue)}>继续</Button>

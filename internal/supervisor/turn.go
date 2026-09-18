@@ -8,7 +8,22 @@ import (
 	"grokmcp/internal/protocol"
 )
 
-var errPlanPending = errors.New("plan pending decision")
+var (
+	errPlanPending = errors.New("plan pending decision")
+	errJobInactive = errors.New("job is no longer active")
+)
+
+func acceptsTurnControl(job protocol.Job) bool {
+	if job.UserCancelled {
+		return false
+	}
+	switch job.State {
+	case protocol.StateCancelled, protocol.StateCompleted, protocol.StateFailed:
+		return false
+	default:
+		return true
+	}
+}
 
 func (s *Service) applyPromptResult(jobID string, item queued, res agent.PromptResult) {
 	if item.gen != s.currentGen(jobID) {
@@ -125,8 +140,8 @@ func (s *Service) Continue(_ context.Context, jobID string) (protocol.Job, error
 	if err != nil {
 		return protocol.Job{}, err
 	}
-	if job.UserCancelled {
-		return s.decorate(job), nil
+	if !acceptsTurnControl(job) {
+		return protocol.Job{}, errJobInactive
 	}
 	if job.State == protocol.StatePlanReady {
 		return s.decorate(job), errPlanPending

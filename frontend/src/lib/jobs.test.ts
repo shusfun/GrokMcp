@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterJobs, formatElapsed, sortJobs, stageViewLabel, summarizeStatus, type Job } from "./jobs";
+import { canControlTurn, filterJobs, formatElapsed, sortJobs, stageViewLabel, summarizeStatus, type Job } from "./jobs";
 
 function job(partial: Partial<Job>): Job {
   return {
@@ -69,5 +69,15 @@ describe("job lib", () => {
       job({ job_id: "d", state: "plan_ready", elapsed_seconds: 20 }),
     ]);
     expect(ordered.map((j) => j.job_id)).toEqual(["c", "d", "b", "a"]);
+  });
+
+  it("hides turn controls after cancel or finish", () => {
+    expect(canControlTurn(job({ state: "needs_input" }))).toBe(true);
+    expect(canControlTurn(job({ state: "executing" }))).toBe(true);
+    expect(canControlTurn(job({ state: "plan_ready" }))).toBe(false);
+    expect(canControlTurn(job({ state: "cancelled" }))).toBe(false);
+    expect(canControlTurn(job({ state: "completed" }))).toBe(false);
+    expect(canControlTurn(job({ state: "failed" }))).toBe(false);
+    expect(canControlTurn(job({ state: "needs_input", user_cancelled: true }))).toBe(false);
   });
 });

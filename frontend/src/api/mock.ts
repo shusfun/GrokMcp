@@ -47,6 +47,22 @@ const jobs: Job[] = [
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   },
+  {
+    job_id: "job-cancelled",
+    grok_session_id: "44444444-4444-4444-4444-444444444444",
+    cwd: "/tmp/dash",
+    project: "GrokMcp",
+    title: "Dashboard 可视化测试",
+    state: "cancelled",
+    view_mode: "headless",
+    input_owner: "supervisor",
+    last_action: "Cancelled",
+    last_summary: "plan cancelled",
+    user_cancelled: true,
+    elapsed_seconds: 18 * 60,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
 ];
 
 let settings: Settings = {

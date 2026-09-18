@@ -729,6 +729,25 @@ func TestReviseThenCancel(t *testing.T) {
 	if j.State != protocol.StateCancelled {
 		t.Fatalf("state %s", j.State)
 	}
+	if _, err := s.CancelTurn(context.Background(), id); err == nil {
+		t.Fatal("expected cancel turn to fail after plan cancel")
+	}
+	if _, err := s.Continue(context.Background(), id); err == nil {
+		t.Fatal("expected continue to fail after plan cancel")
+	}
+	j, _ = s.Status(context.Background(), id)
+	if j.State != protocol.StateCancelled {
+		t.Fatalf("state after turn controls %s", j.State)
+	}
+	ev, err := s.Events(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ev {
+		if e.EventType == string(protocol.StateNeedsInput) {
+			t.Fatalf("unexpected needs_input event after plan cancel: %+v", ev)
+		}
+	}
 }
 
 func TestReviseDoesNotRepublishOldPlan(t *testing.T) {

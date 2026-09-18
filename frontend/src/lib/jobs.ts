@@ -27,6 +27,7 @@ export type Job = {
   last_summary?: string;
   plan_summary?: string;
   busy?: boolean;
+  user_cancelled?: boolean;
   elapsed_seconds: number;
   created_at: string;
   updated_at: string;
@@ -148,4 +149,19 @@ export function summarizeStatus(jobs: Job[]) {
 
 export function projectOptions(jobs: Job[]): string[] {
   return [...new Set(jobs.map((j) => j.project).filter(Boolean))].sort();
+}
+
+const TURN_CONTROL: JobState[] = [
+  "needs_input",
+  "blocked",
+  "executing",
+  "planning",
+  "starting",
+  "recovering",
+  "disconnected",
+];
+
+export function canControlTurn(job: Job): boolean {
+  if (job.user_cancelled) return false;
+  return TURN_CONTROL.includes(job.state);
 }

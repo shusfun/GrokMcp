@@ -11,6 +11,9 @@ func (s *Service) CancelTurn(ctx context.Context, jobID string) (protocol.Job, e
 	if err != nil {
 		return protocol.Job{}, err
 	}
+	if !acceptsTurnControl(job) {
+		return protocol.Job{}, errJobInactive
+	}
 	rt := s.runtime(jobID)
 	s.mu.Lock()
 	if rt.cancel != nil {
