@@ -137,6 +137,14 @@ export const mockClient: Client = {
     };
   },
   async testTerminal() {},
+  async appVersion() {
+    return "dev";
+  },
+  async checkUpdate() {
+    return null;
+  },
+  async downloadUpdate() {},
+  async restartUpdate() {},
   subscribe(fn) {
     listeners.add(fn);
     return () => listeners.delete(fn);

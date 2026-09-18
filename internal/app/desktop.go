@@ -8,9 +8,12 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/updater"
+	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 	"grokmcp/internal/core"
 	"grokmcp/internal/notify"
 	"grokmcp/internal/protocol"
+	"grokmcp/internal/version"
 	"grokmcp/internal/web"
 )
 
@@ -31,6 +34,22 @@ func Run(backend core.Backend) error {
 		},
 	})
 	svc.quit = app.Quit
+	gh, err := github.New(github.Config{
+		Repository:    githubRepo,
+		ChecksumAsset: "SHA256SUMS.txt",
+		AssetMatcher:  matchReleaseAsset,
+	})
+	if err != nil {
+		return err
+	}
+	if err := app.Updater.Init(updater.Config{
+		CurrentVersion: version.Version,
+		Providers:      []updater.Provider{gh},
+		Window:         updater.WindowNone,
+	}); err != nil {
+		return err
+	}
+	svc.updater = app.Updater
 
 	winOpts := application.WebviewWindowOptions{
 		Title:            "Grok Supervisor",

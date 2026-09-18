@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { getClient } from "./api";
 import type { StatusBar } from "./api/client";
 import { TitleBar } from "./components/TitleBar";
+import { UpdateBar } from "./components/UpdateBar";
 import { Dialog } from "./components/ui/dialog";
 import { Button } from "./components/ui/button";
 import { isWails, listenDesktop, quitApp } from "./api/wails";
@@ -48,6 +49,7 @@ export function App() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--paper)] text-[var(--ink)]">
       <TitleBar bar={bar} />
+      <UpdateBar />
       <div className="flex min-h-0 flex-1 flex-col bg-[var(--surface)]">
         <nav className="flex gap-1 border-b border-[var(--line)] px-3" style={{ ["--wails-draggable" as string]: "no-drag" }}>
           {TABS.map((tab) => (

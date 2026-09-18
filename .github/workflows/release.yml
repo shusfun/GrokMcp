@@ -38,6 +38,8 @@ jobs:
           path: |
             dist/GrokMcp-*-darwin-amd64.dmg
             dist/GrokMcp-*-darwin-arm64.dmg
+            dist/GrokMcp-*-darwin-amd64.zip
+            dist/GrokMcp-*-darwin-arm64.zip
           if-no-files-found: error
 
   windows:

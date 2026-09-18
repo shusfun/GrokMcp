@@ -64,7 +64,7 @@ build_darwin() {
 	export MACOSX_DEPLOYMENT_TARGET=15.0
 	export CGO_CFLAGS="${CGO_CFLAGS:--mmacosx-version-min=15.0}"
 	export CGO_LDFLAGS="${CGO_LDFLAGS:--mmacosx-version-min=15.0}"
-	go build -trimpath -ldflags="-s -w" -o "$outdir/$BIN_NAME" ./cmd/grokmcp
+	go build -trimpath -ldflags="-s -w -X grokmcp/internal/version.Version=${VERSION}" -o "$outdir/$BIN_NAME" ./cmd/grokmcp
 
 	appdir="$outdir/$APP_NAME.app"
 	rm -rf "$appdir"
@@ -73,6 +73,11 @@ build_darwin() {
 	sed "s/__VERSION__/${VERSION}/g" build/darwin/Info.plist > "$appdir/Contents/Info.plist"
 	cp build/darwin/icons.icns "$appdir/Contents/Resources/icons.icns"
 	codesign --force --deep --sign - "$appdir"
+
+	zipfile="$DIST_DIR/${BIN_NAME}-${VERSION}-darwin-${arch}.zip"
+	rm -f "$zipfile"
+	ditto -c -k --keepParent "$appdir" "$zipfile"
+	echo "wrote $zipfile"
 
 	stage="$DIST_DIR/dmg-$arch"
 	rm -rf "$stage"
@@ -97,7 +102,7 @@ build_windows() {
 	export GOARCH=amd64
 	export CGO_ENABLED=0
 	unset MACOSX_DEPLOYMENT_TARGET CGO_CFLAGS CGO_LDFLAGS
-	go build -trimpath -ldflags="-s -w -H windowsgui" -o "$outdir/$BIN_NAME.exe" ./cmd/grokmcp
+	go build -trimpath -ldflags="-s -w -H windowsgui -X grokmcp/internal/version.Version=${VERSION}" -o "$outdir/$BIN_NAME.exe" ./cmd/grokmcp
 
 	zipfile="$DIST_DIR/${BIN_NAME}-${VERSION}-windows-amd64.zip"
 	rm -f "$zipfile"

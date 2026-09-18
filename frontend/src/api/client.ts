@@ -33,6 +33,12 @@ export type BoundaryEvent = {
   created_at: string;
 };
 
+export type UpdateRelease = {
+  version: string;
+  name?: string;
+  notes?: string;
+};
+
 export type Client = {
   listJobs(): Promise<Job[]>;
   status(jobId: string): Promise<Job>;
@@ -48,5 +54,9 @@ export type Client = {
   saveSettings(s: Settings): Promise<void>;
   diagnose(): Promise<Diagnose>;
   testTerminal(template: string): Promise<void>;
+  appVersion(): Promise<string>;
+  checkUpdate(): Promise<UpdateRelease | null>;
+  downloadUpdate(): Promise<void>;
+  restartUpdate(): Promise<void>;
   subscribe(fn: () => void): () => void;
 };

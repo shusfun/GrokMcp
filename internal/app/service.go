@@ -2,14 +2,18 @@ package app
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/wailsapp/wails/v3/pkg/updater"
 	"grokmcp/internal/core"
 	"grokmcp/internal/protocol"
+	"grokmcp/internal/version"
 )
 
 type Service struct {
 	Backend core.Backend
 	quit    func()
+	updater *updater.Updater
 }
 
 func (s *Service) ListJobs(ctx context.Context) ([]protocol.Job, error) {
@@ -78,4 +82,32 @@ func (s *Service) Quit(context.Context) {
 	if s.quit != nil {
 		s.quit()
 	}
+}
+
+func (s *Service) AppVersion(context.Context) string {
+	return version.Version
+}
+
+func (s *Service) CheckUpdate(ctx context.Context) (*updater.Release, error) {
+	if s.updater == nil {
+		return nil, fmt.Errorf("updater not configured")
+	}
+	return s.updater.Check(ctx)
+}
+
+func (s *Service) DownloadUpdate(context.Context) error {
+	if s.updater == nil {
+		return fmt.Errorf("updater not configured")
+	}
+	go func() {
+		_ = s.updater.DownloadAndInstall(context.Background())
+	}()
+	return nil
+}
+
+func (s *Service) RestartUpdate(ctx context.Context) error {
+	if s.updater == nil {
+		return fmt.Errorf("updater not configured")
+	}
+	return s.updater.Restart(ctx)
 }
