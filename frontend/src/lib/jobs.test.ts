@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterJobs, formatElapsed, stageViewLabel, summarizeStatus, type Job } from "./jobs";
+import { filterJobs, formatElapsed, sortJobs, stageViewLabel, summarizeStatus, type Job } from "./jobs";
 
 function job(partial: Partial<Job>): Job {
   return {
@@ -48,5 +48,26 @@ describe("job lib", () => {
     ]);
     expect(sum.working).toBe(1);
     expect(sum.needsInput).toBe(2);
+  });
+
+  it("filters attention and working groups", () => {
+    const jobs = [
+      job({ job_id: "1", state: "executing" }),
+      job({ job_id: "2", state: "plan_ready" }),
+      job({ job_id: "3", state: "needs_input" }),
+      job({ job_id: "4", state: "completed" }),
+    ];
+    expect(filterJobs(jobs, { query: "", state: "attention", project: "all", view: "all" }).map((j) => j.job_id)).toEqual(["2", "3"]);
+    expect(filterJobs(jobs, { query: "", state: "working", project: "all", view: "all" }).map((j) => j.job_id)).toEqual(["1"]);
+  });
+
+  it("sorts needs-input before working", () => {
+    const ordered = sortJobs([
+      job({ job_id: "a", state: "completed", elapsed_seconds: 90 }),
+      job({ job_id: "b", state: "executing", elapsed_seconds: 30 }),
+      job({ job_id: "c", state: "needs_input", elapsed_seconds: 10 }),
+      job({ job_id: "d", state: "plan_ready", elapsed_seconds: 20 }),
+    ]);
+    expect(ordered.map((j) => j.job_id)).toEqual(["c", "d", "b", "a"]);
   });
 });

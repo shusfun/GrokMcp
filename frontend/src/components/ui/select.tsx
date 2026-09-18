@@ -36,16 +36,16 @@ export function Select({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
-        className="flex h-8 w-full items-center justify-between gap-2 rounded-md border border-[var(--line)] bg-white px-2 text-left text-sm text-[var(--ink)]"
+        className="flex h-8 w-full items-center justify-between gap-2 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 text-left text-sm text-[var(--ink)]"
         onClick={() => setOpen((v) => !v)}
       >
         <span className="truncate">{label}</span>
-        <span className="text-[#607068]">▾</span>
+        <span className="text-[var(--muted)]">▾</span>
       </button>
       {open ? (
         <ul
           role="listbox"
-          className="absolute z-30 mt-1 max-h-60 w-full overflow-auto rounded-md border border-[var(--line)] bg-white py-1 shadow"
+          className="absolute z-30 mt-1 max-h-60 w-full overflow-auto rounded-md border border-[var(--line)] bg-[var(--surface)] py-1 shadow-lg"
         >
           {options.map((opt) => (
             <li key={opt.value}>
@@ -54,8 +54,8 @@ export function Select({
                 role="option"
                 aria-selected={opt.value === value}
                 className={cn(
-                  "block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--green-soft)]",
-                  opt.value === value && "font-semibold text-[var(--green)]",
+                  "block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--accent-soft)]",
+                  opt.value === value && "font-semibold text-[var(--accent)]",
                 )}
                 onClick={() => {
                   onChange(opt.value);

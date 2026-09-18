@@ -81,16 +81,49 @@ export function formatElapsed(seconds: number): string {
   return m === 0 ? `${h}h` : `${h}h${m}m`;
 }
 
+const WORKING: JobState[] = ["planning", "executing", "starting", "recovering"];
+const ATTENTION: JobState[] = ["needs_input", "plan_ready"];
+
+const STATE_RANK: Record<string, number> = {
+  needs_input: 0,
+  plan_ready: 1,
+  blocked: 2,
+  executing: 3,
+  planning: 4,
+  starting: 5,
+  recovering: 6,
+  disconnected: 7,
+  failed: 8,
+  cancelled: 9,
+  completed: 10,
+  created: 11,
+};
+
+function matchesState(job: Job, state: string): boolean {
+  if (!state || state === "all") return true;
+  if (state === "attention") return ATTENTION.includes(job.state);
+  if (state === "working") return WORKING.includes(job.state);
+  return job.state === state;
+}
+
 export function filterJobs(jobs: Job[], filters: JobFilters): Job[] {
   const q = filters.query.trim().toLowerCase();
   return jobs.filter((job) => {
-    if (filters.state && filters.state !== "all" && job.state !== filters.state) return false;
+    if (!matchesState(job, filters.state)) return false;
     if (filters.project && filters.project !== "all" && job.project !== filters.project) return false;
     if (filters.view && filters.view !== "all" && job.view_mode !== filters.view) return false;
     if (!q) return true;
     return [job.title, job.project, job.last_action, job.grok_session_id]
       .filter(Boolean)
       .some((v) => String(v).toLowerCase().includes(q));
+  });
+}
+
+export function sortJobs(jobs: Job[]): Job[] {
+  return [...jobs].sort((a, b) => {
+    const rank = (STATE_RANK[a.state] ?? 50) - (STATE_RANK[b.state] ?? 50);
+    if (rank !== 0) return rank;
+    return b.elapsed_seconds - a.elapsed_seconds;
   });
 }
 

@@ -1,25 +1,19 @@
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { Outlet, useNavigate } from "react-router";
 import { useEffect, useState } from "react";
 import { getClient } from "./api";
-import type { StatusBar } from "./api/client";
+import type { StatusBar as StatusBarData } from "./api/client";
 import { TitleBar } from "./components/TitleBar";
+import { StatusBar } from "./components/StatusBar";
 import { UpdateBar } from "./components/UpdateBar";
 import { Dialog } from "./components/ui/dialog";
 import { Button } from "./components/ui/button";
 import { isWails, listenDesktop, quitApp } from "./api/wails";
-import { cn } from "./lib/cn";
 
-const emptyBar: StatusBar = { leader_ok: false, mcp_ok: false, working: 0, needs_input: 0 };
-
-const TABS = [
-  { to: "/", label: "总览", end: true },
-  { to: "/settings", label: "设置", end: false },
-  { to: "/diagnostics", label: "诊断", end: false },
-];
+const emptyBar: StatusBarData = { leader_ok: false, mcp_ok: false, working: 0, needs_input: 0 };
 
 export function App() {
   const [quitWarn, setQuitWarn] = useState(false);
-  const [bar, setBar] = useState<StatusBar>(emptyBar);
+  const [bar, setBar] = useState<StatusBarData>(emptyBar);
   const navigate = useNavigate();
   const client = getClient();
 
@@ -48,30 +42,12 @@ export function App() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--paper)] text-[var(--ink)]">
-      <TitleBar bar={bar} />
+      <TitleBar />
       <UpdateBar />
-      <div className="flex min-h-0 flex-1 flex-col bg-[var(--surface)]">
-        <nav className="flex gap-1 border-b border-[var(--line)] px-3" style={{ ["--wails-draggable" as string]: "no-drag" }}>
-          {TABS.map((tab) => (
-            <NavLink
-              key={tab.to}
-              to={tab.to}
-              end={tab.end}
-              className={({ isActive }) => cn(
-                "-mb-px border-b-2 px-3 py-2 text-sm",
-                isActive
-                  ? "border-[var(--green)] font-semibold text-[var(--green)]"
-                  : "border-transparent text-[var(--muted)] hover:text-[var(--ink)]",
-              )}
-            >
-              {tab.label}
-            </NavLink>
-          ))}
-        </nav>
-        <main className="min-h-0 flex-1 overflow-auto">
-          <Outlet />
-        </main>
-      </div>
+      <main className="min-h-0 flex-1 overflow-hidden">
+        <Outlet />
+      </main>
+      <StatusBar bar={bar} />
       <Dialog
         open={quitWarn}
         title="仍有活动任务"

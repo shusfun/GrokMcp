@@ -58,7 +58,7 @@ func Run(backend core.Backend) error {
 		MinWidth:         800,
 		MinHeight:        520,
 		URL:              "/",
-		BackgroundColour: application.NewRGB(40, 72, 58),
+		BackgroundColour: application.NewRGB(22, 22, 22),
 		Mac: application.MacWindow{
 			TitleBar: application.MacTitleBarHidden,
 		},

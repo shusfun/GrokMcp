@@ -1,22 +1,47 @@
 @import "tailwindcss";
 
-:root {
-  --ink: #17211b;
-  --muted: #607068;
-  --line: #ccd8d1;
-  --paper: #f4f7f5;
-  --green: #176b48;
-  --green-soft: #e7f2eb;
-  --head: #28483a;
-  --wait: #9a6200;
-  --wait-soft: #fff4d9;
-  --fail: #a33b45;
-  --fail-soft: #fae9eb;
-  --surface: #ffffff;
-  --row: #f5f8f6;
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #f2f2f4;
+  --muted: #8e8e96;
+  --line: #2a2a2e;
+  --paper: #161616;
+  --surface: #1c1c1e;
+  --row: #141414;
+  --head: #161616;
+  --accent: #7c6af7;
+  --accent-soft: rgb(124 106 247 / 0.18);
+  --green: #3dd68c;
+  --green-soft: rgb(61 214 140 / 0.16);
+  --wait: #f5a524;
+  --wait-soft: rgb(245 165 36 / 0.16);
+  --fail: #ff6b6b;
+  --fail-soft: rgb(255 107 107 / 0.16);
 }
 
-html, body, #root {
+[data-theme="light"] {
+  color-scheme: light;
+  --ink: #1c1c1e;
+  --muted: #6e6e76;
+  --line: #e6e6ea;
+  --paper: #f3f3f5;
+  --surface: #ffffff;
+  --row: #f3f3f5;
+  --head: #f3f3f5;
+  --accent: #6d5ae6;
+  --accent-soft: rgb(109 90 230 / 0.12);
+  --green: #248a3d;
+  --green-soft: rgb(36 138 61 / 0.12);
+  --wait: #9a6200;
+  --wait-soft: rgb(154 98 0 / 0.12);
+  --fail: #c9343a;
+  --fail-soft: rgb(201 52 58 / 0.12);
+}
+
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
 }

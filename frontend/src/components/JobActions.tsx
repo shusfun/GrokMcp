@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { Copy, FolderOpen, MoreHorizontal } from "lucide-react";
 import type { Job } from "../lib/jobs";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { DropdownItem, DropdownMenu } from "./ui/dropdown-menu";
 
 type Props = {
   job: Job;
@@ -36,7 +38,7 @@ export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, o
           </div>
         </div>
       ) : null}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {job.view_mode === "headed" ? (
           <Button size="sm" variant="outline" disabled={busy} onClick={() => run(onHeadless)}>转为无头</Button>
         ) : (
@@ -48,8 +50,20 @@ export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, o
             <Button size="sm" variant="outline" disabled={busy} onClick={() => run(onContinue)}>继续</Button>
           </>
         ) : null}
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(onOpenDir)}>打开项目目录</Button>
-        <Button size="sm" variant="ghost" onClick={() => void navigator.clipboard.writeText(job.grok_session_id ?? "")}>复制 session ID</Button>
+        <DropdownMenu
+          trigger={(
+            <Button size="icon" variant="ghost" aria-label="更多" disabled={busy}>
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          )}
+        >
+          <DropdownItem onClick={() => run(onOpenDir)}>
+            <span className="flex items-center gap-2"><FolderOpen className="h-3.5 w-3.5" />打开项目目录</span>
+          </DropdownItem>
+          <DropdownItem onClick={() => void navigator.clipboard.writeText(job.grok_session_id ?? "")}>
+            <span className="flex items-center gap-2"><Copy className="h-3.5 w-3.5" />复制 session ID</span>
+          </DropdownItem>
+        </DropdownMenu>
       </div>
       {error ? <p className="text-sm text-[var(--fail)]">{error}</p> : null}
     </div>
