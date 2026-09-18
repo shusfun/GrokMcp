@@ -567,6 +567,117 @@ func TestWorktreeWritesEffectiveCwd(t *testing.T) {
 	}
 }
 
+func TestAttachAtPlanReadyWhileBusy(t *testing.T) {
+	fake := agent.NewFake()
+	block := make(chan struct{})
+	fake.PromptBlock["sess-1"] = block
+	fake.PlanReadyBeforeBlock = "plan excerpt"
+	term := terminal.NewFake()
+	s := newTest(t, fake, term)
+	res, err := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.Jobs[0].JobID
+	j := waitState(t, s, id, protocol.StatePlanReady)
+	if !j.Busy {
+		t.Fatal("expected busy plan prompt")
+	}
+	if j.GrokSessionID != "sess-1" {
+		t.Fatalf("session %s", j.GrokSessionID)
+	}
+	j, err = s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.ViewMode != protocol.ViewHeaded || j.InputOwner != protocol.OwnerTUI {
+		t.Fatalf("view=%s owner=%s", j.ViewMode, j.InputOwner)
+	}
+	if j.State != protocol.StatePlanReady || j.GrokSessionID != "sess-1" {
+		t.Fatalf("%+v", j)
+	}
+	if !j.Busy {
+		t.Fatal("attach must not wait for prompt to finish")
+	}
+	if term.ResumeCount() != 1 {
+		t.Fatalf("resume %v", term.ResumeSnapshot())
+	}
+	if len(fake.Cancels) != 0 {
+		t.Fatalf("cancel on attach: %v", fake.Cancels)
+	}
+	if fake.PromptCount() != 1 {
+		t.Fatalf("re-prompted: %d", fake.PromptCount())
+	}
+	snap, err := s.DebugSnapshot(context.Background(), protocol.DebugSnapshotRequest{JobID: id, Limit: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, ev := range snap.Events {
+		got[ev.Event] = true
+	}
+	for _, name := range []string{"view.attach.requested", "terminal.opened", "view.attached"} {
+		if !got[name] {
+			t.Fatalf("missing %s", name)
+		}
+	}
+	select {
+	case <-block:
+		t.Fatal("plan prompt returned during attach")
+	default:
+	}
+}
+
+func TestAttachWhenIdleProceedsAtPlanReady(t *testing.T) {
+	fake := agent.NewFake()
+	block := make(chan struct{})
+	fake.PromptBlock["sess-1"] = block
+	term := terminal.NewFake()
+	s := newTest(t, fake, term)
+	res, err := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.Jobs[0].JobID
+	deadline := time.Now().Add(2 * time.Second)
+	var j protocol.Job
+	for time.Now().Before(deadline) {
+		j, _ = s.Status(context.Background(), id)
+		if j.Busy && j.State == protocol.StatePlanning && j.GrokSessionID != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !j.Busy || j.State != protocol.StatePlanning {
+		t.Fatalf("expected busy planning, got state=%s busy=%v", j.State, j.Busy)
+	}
+	j, err = s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.ViewMode != protocol.ViewAttaching {
+		t.Fatalf("view %s", j.ViewMode)
+	}
+	if term.ResumeCount() != 0 {
+		t.Fatalf("resumed before plan_ready: %v", term.ResumeSnapshot())
+	}
+	s.becomePlanReady(j, "plan excerpt")
+	j = waitView(t, s, id, protocol.ViewHeaded)
+	if j.InputOwner != protocol.OwnerTUI || j.State != protocol.StatePlanReady {
+		t.Fatalf("%+v", j)
+	}
+	if term.ResumeCount() == 0 {
+		t.Fatal("expected resume after plan_ready")
+	}
+	if len(fake.Cancels) != 0 {
+		t.Fatalf("cancel on attach: %v", fake.Cancels)
+	}
+}
+
 func TestLiveAttachWaitsWhileBusy(t *testing.T) {
 	fake := agent.NewFake()
 	fake.Mode = "live"

@@ -65,7 +65,7 @@ func (s *Service) attach(ctx context.Context, job protocol.Job) (protocol.Job, e
 	if job.GrokSessionID == "" {
 		return protocol.Job{}, errors.New("job has no grok session")
 	}
-	if !s.isIdle(job.JobID) {
+	if !s.attachAllowed(job) {
 		job.ViewMode = protocol.ViewAttaching
 		s.touch(&job)
 		s.save(job)
@@ -95,14 +95,14 @@ func (s *Service) attachWhenIdle(jobID string, gen uint64) {
 		if cur != gen {
 			return
 		}
-		if s.isIdle(jobID) {
-			job, err := s.load(jobID)
-			if err != nil || job.DesiredViewMode != protocol.ViewHeaded {
-				return
-			}
-			if job.ViewMode != protocol.ViewAttaching && job.ViewMode != protocol.ViewHeadless {
-				return
-			}
+		job, err := s.load(jobID)
+		if err != nil || job.DesiredViewMode != protocol.ViewHeaded {
+			return
+		}
+		if job.ViewMode != protocol.ViewAttaching && job.ViewMode != protocol.ViewHeadless {
+			return
+		}
+		if s.attachAllowed(job) {
 			_, _ = s.launchTUI(context.Background(), job)
 			return
 		}

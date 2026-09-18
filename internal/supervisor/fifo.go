@@ -83,6 +83,19 @@ func (s *Service) isIdle(jobID string) bool {
 	return !rt.busy && len(rt.queue) == 0
 }
 
+func (s *Service) attachAllowed(job protocol.Job) bool {
+	if job.GrokSessionID == "" {
+		return false
+	}
+	if job.InputOwner == protocol.OwnerTUI || job.ViewMode == protocol.ViewDetaching {
+		return false
+	}
+	if job.State == protocol.StatePlanReady {
+		return true
+	}
+	return s.isIdle(job.JobID)
+}
+
 func (s *Service) pump(jobID string) {
 	for {
 		job, err := s.load(jobID)
@@ -152,7 +165,7 @@ func (s *Service) maybeAttachDesired(jobID string) {
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
-	if closed || !s.isIdle(jobID) {
+	if closed {
 		return
 	}
 	job, err := s.load(jobID)
@@ -162,7 +175,7 @@ func (s *Service) maybeAttachDesired(jobID string) {
 	if job.ViewMode == protocol.ViewHeaded || job.ViewMode == protocol.ViewDetaching {
 		return
 	}
-	if job.InputOwner == protocol.OwnerTUI {
+	if !s.attachAllowed(job) {
 		return
 	}
 	_, _ = s.launchTUI(context.Background(), job)

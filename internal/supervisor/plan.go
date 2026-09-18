@@ -101,6 +101,7 @@ func (s *Service) becomePlanReady(job protocol.Job, text string) {
 	_ = s.store.AddEvent(job.JobID, string(protocol.StatePlanReady), job.LastAction, s.clock.Now())
 	s.save(job)
 	s.emitTrace(job, "info", "acp", "plan.ready", "plan ready", nil)
+	s.maybeAttachDesired(job.JobID)
 }
 
 func readPlanFile(cwd, sessionID string) string {
