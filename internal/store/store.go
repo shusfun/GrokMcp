@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -80,6 +81,13 @@ CREATE TABLE IF NOT EXISTS settings (
 			return err
 		}
 	}
+	if _, err := s.db.Exec(`ALTER TABLE jobs ADD COLUMN archived_at INTEGER`); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+			return err
+		}
+	}
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS jobs_list_idx ON jobs(archived_at, updated_at, created_at, job_id)`)
 	return nil
 }
 
@@ -93,14 +101,17 @@ type Record struct {
 	RecoverFails       []int64
 }
 
+const jobSelectCols = `job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, desired_view_mode, input_owner,
+		plan_digest, plan_summary, last_action, last_summary, user_cancelled, missing_marker_count, recover_fails, created_at, updated_at, archived_at`
+
 func (s *Store) PutJob(rec Record) error {
 	j := rec.Job
 	_, err := s.db.Exec(`
 INSERT INTO jobs (
   job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, desired_view_mode, input_owner,
   plan_digest, plan_summary, last_action, last_summary, user_cancelled, missing_marker_count, recover_fails,
-  created_at, updated_at
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  created_at, updated_at, archived_at
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(job_id) DO UPDATE SET
   codex_thread_id=excluded.codex_thread_id,
   grok_session_id=excluded.grok_session_id,
@@ -117,24 +128,21 @@ ON CONFLICT(job_id) DO UPDATE SET
   user_cancelled=excluded.user_cancelled,
   missing_marker_count=excluded.missing_marker_count,
   recover_fails=excluded.recover_fails,
-  updated_at=excluded.updated_at
+  updated_at=excluded.updated_at,
+  archived_at=excluded.archived_at
 `, j.JobID, j.CodexThreadID, j.GrokSessionID, j.Cwd, j.Title, string(j.State), string(j.ViewMode),
 		string(desiredView(j)), string(j.InputOwner), j.PlanDigest, j.PlanSummary, j.LastAction, j.LastSummary, boolToInt(j.UserCancelled),
-		rec.MissingMarkerCount, joinInt64(rec.RecoverFails), j.CreatedAt.Unix(), j.UpdatedAt.Unix())
+		rec.MissingMarkerCount, joinInt64(rec.RecoverFails), j.CreatedAt.Unix(), j.UpdatedAt.Unix(), nullUnix(j.ArchivedAt))
 	return err
 }
 
 func (s *Store) GetJob(id string) (Record, error) {
-	row := s.db.QueryRow(`SELECT job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, desired_view_mode, input_owner,
-		plan_digest, plan_summary, last_action, last_summary, user_cancelled, missing_marker_count, recover_fails, created_at, updated_at
-		FROM jobs WHERE job_id=?`, id)
+	row := s.db.QueryRow(`SELECT `+jobSelectCols+` FROM jobs WHERE job_id=?`, id)
 	return scanJob(row)
 }
 
 func (s *Store) ListJobs() ([]Record, error) {
-	rows, err := s.db.Query(`SELECT job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, desired_view_mode, input_owner,
-		plan_digest, plan_summary, last_action, last_summary, user_cancelled, missing_marker_count, recover_fails, created_at, updated_at
-		FROM jobs ORDER BY updated_at DESC`)
+	rows, err := s.db.Query(`SELECT ` + jobSelectCols + ` FROM jobs ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +156,132 @@ func (s *Store) ListJobs() ([]Record, error) {
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+const activeGroupSQL = `CASE WHEN state IN ('starting','planning','executing','recovering','plan_ready','needs_input','disconnected') THEN 1 ELSE 0 END`
+
+func (s *Store) ListJobsPage(q protocol.ListJobsQuery) ([]Record, string, bool, error) {
+	limit := protocol.ClampJobLimit(q.Limit)
+	var (
+		where []string
+		args  []any
+	)
+	if q.IncludeArchived {
+		where = append(where, `archived_at IS NOT NULL`)
+	} else {
+		where = append(where, `archived_at IS NULL`)
+	}
+	if st := strings.TrimSpace(q.State); st != "" && st != "all" {
+		switch st {
+		case "attention":
+			where = append(where, `state IN ('plan_ready','needs_input')`)
+		case "working":
+			where = append(where, `state IN ('planning','executing','starting','recovering')`)
+		default:
+			where = append(where, `state = ?`)
+			args = append(args, st)
+		}
+	}
+	if view := strings.TrimSpace(q.View); view != "" && view != "all" {
+		where = append(where, `view_mode = ?`)
+		args = append(args, view)
+	}
+	if project := strings.TrimSpace(q.Project); project != "" && project != "all" {
+		where = append(where, `(cwd = ? OR cwd LIKE '%/' || ? OR cwd LIKE '%\\' || ?)`)
+		args = append(args, project, project, project)
+	}
+	if query := strings.TrimSpace(q.Query); query != "" {
+		like := "%" + strings.ToLower(query) + "%"
+		where = append(where, `(lower(ifnull(title,'')) LIKE ? OR lower(ifnull(last_action,'')) LIKE ? OR lower(ifnull(grok_session_id,'')) LIKE ? OR lower(cwd) LIKE ?)`)
+		args = append(args, like, like, like, like)
+	}
+	if strings.TrimSpace(q.Cursor) != "" {
+		cur, err := protocol.DecodeJobCursor(q.Cursor)
+		if err != nil {
+			return nil, "", false, err
+		}
+		where = append(where, fmt.Sprintf(`(
+  %[1]s < ? OR
+  (%[1]s = ? AND updated_at < ?) OR
+  (%[1]s = ? AND updated_at = ? AND created_at < ?) OR
+  (%[1]s = ? AND updated_at = ? AND created_at = ? AND job_id < ?)
+)`, activeGroupSQL))
+		args = append(args, cur.G, cur.G, cur.U, cur.G, cur.U, cur.C, cur.G, cur.U, cur.C, cur.I)
+	}
+	sql := `SELECT ` + jobSelectCols + ` FROM jobs WHERE ` + strings.Join(where, " AND ") +
+		` ORDER BY ` + activeGroupSQL + ` DESC, updated_at DESC, created_at DESC, job_id DESC LIMIT ?`
+	args = append(args, limit+1)
+	rows, err := s.db.Query(sql, args...)
+	if err != nil {
+		return nil, "", false, err
+	}
+	defer rows.Close()
+	var out []Record
+	for rows.Next() {
+		rec, err := scanJob(rows)
+		if err != nil {
+			return nil, "", false, err
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", false, err
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	next := ""
+	if hasMore && len(out) > 0 {
+		next = protocol.EncodeJobCursor(out[len(out)-1].Job)
+	}
+	return out, next, hasMore, nil
+}
+
+func (s *Store) ListProjects(includeArchived bool) ([]string, error) {
+	q := `SELECT cwd FROM jobs`
+	if !includeArchived {
+		q += ` WHERE archived_at IS NULL`
+	}
+	rows, err := s.db.Query(q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]struct{}{}
+	var out []string
+	for rows.Next() {
+		var cwd string
+		if err := rows.Scan(&cwd); err != nil {
+			return nil, err
+		}
+		p := textutil.ProjectName(cwd)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	slices.Sort(out)
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteJob(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM boundary_events WHERE job_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM jobs WHERE job_id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) AddEvent(jobID, eventType, summary string, at time.Time) error {
@@ -242,10 +376,11 @@ func scanJob(row rowScanner) (Record, error) {
 	var state, view, owner string
 	var desired sql.NullString
 	var cancelled, created, updated int64
+	var archived sql.NullInt64
 	var fails string
 	err := row.Scan(&rec.Job.JobID, &rec.Job.CodexThreadID, &rec.Job.GrokSessionID, &rec.Job.Cwd, &rec.Job.Title,
 		&state, &view, &desired, &owner, &rec.Job.PlanDigest, &rec.Job.PlanSummary, &rec.Job.LastAction, &rec.Job.LastSummary,
-		&cancelled, &rec.MissingMarkerCount, &fails, &created, &updated)
+		&cancelled, &rec.MissingMarkerCount, &fails, &created, &updated, &archived)
 	if err != nil {
 		return Record{}, err
 	}
@@ -263,6 +398,9 @@ func scanJob(row rowScanner) (Record, error) {
 	rec.Job.UserCancelled = cancelled != 0
 	rec.Job.CreatedAt = time.Unix(created, 0).UTC()
 	rec.Job.UpdatedAt = time.Unix(updated, 0).UTC()
+	if archived.Valid && archived.Int64 != 0 {
+		rec.Job.ArchivedAt = time.Unix(archived.Int64, 0).UTC()
+	}
 	rec.Job.Project = textutil.ProjectName(rec.Job.Cwd)
 	rec.RecoverFails = splitInt64(fails)
 	return rec, nil
@@ -299,6 +437,13 @@ func boolToInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func nullUnix(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.Unix()
 }
 
 func joinInt64(xs []int64) string {

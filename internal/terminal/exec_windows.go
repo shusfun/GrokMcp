@@ -32,6 +32,18 @@ func (e Exec) spawn(_ context.Context, cwd, command, sessionID string) (Handle, 
 	return procHandle{cmd: cmd, sessionID: sessionID}, nil
 }
 
+func (e Exec) ExistingResume(_ context.Context, sessionID string) (Handle, bool, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, false, nil
+	}
+	pid := FindResumePID(sessionID)
+	focused, _ := e.focus(context.Background(), SessionTitle(sessionID))
+	if pid == 0 && !focused {
+		return nil, false, nil
+	}
+	return procHandle{sessionID: sessionID, grokPID: pid}, true, nil
+}
+
 func (e Exec) focus(_ context.Context, title string) (bool, error) {
 	out, err := exec.Command("wt.exe", "--window", title).CombinedOutput()
 	if err == nil {

@@ -21,6 +21,29 @@ func (s *Service) ListJobs(ctx context.Context) ([]protocol.Job, error) {
 	return s.Backend.ListJobs(ctx)
 }
 
+func (s *Service) ListJobsPage(ctx context.Context, cursor string, limit int, includeArchived bool, query, state, project, view string) (protocol.JobPage, error) {
+	return s.Backend.ListJobsPage(ctx, protocol.ListJobsQuery{
+		Cursor: cursor, Limit: limit, IncludeArchived: includeArchived,
+		Query: query, State: state, Project: project, View: view,
+	})
+}
+
+func (s *Service) ListProjects(ctx context.Context, includeArchived bool) ([]string, error) {
+	return s.Backend.ListProjects(ctx, includeArchived)
+}
+
+func (s *Service) ArchiveJob(ctx context.Context, jobID string) (protocol.Job, error) {
+	return s.Backend.ArchiveJob(ctx, jobID)
+}
+
+func (s *Service) UnarchiveJob(ctx context.Context, jobID string) (protocol.Job, error) {
+	return s.Backend.UnarchiveJob(ctx, jobID)
+}
+
+func (s *Service) DeleteJob(ctx context.Context, jobID string) error {
+	return s.Backend.DeleteJob(ctx, jobID)
+}
+
 func (s *Service) Status(ctx context.Context, jobID string) (protocol.Job, error) {
 	return s.Backend.Status(ctx, jobID)
 }

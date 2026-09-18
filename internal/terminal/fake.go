@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -25,6 +26,8 @@ type Fake struct {
 	Handles    map[string]*fakeState
 	CloseDelay time.Duration
 	CloseBlock map[string]chan struct{}
+	ReadyFail  bool
+	NoPID      bool
 }
 
 func NewFake() *Fake {
@@ -35,11 +38,18 @@ func (f *Fake) OpenResume(_ context.Context, _, sessionID, cwd string) (Handle, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Resumes = append(f.Resumes, sessionID+"|"+cwd)
+	if f.ReadyFail {
+		return nil, errors.New("terminal not ready")
+	}
+	pid := 4242
+	if f.NoPID {
+		pid = 0
+	}
 	st := &fakeState{
 		wait:     make(chan struct{}),
 		process:  true,
 		window:   true,
-		pid:      4242,
+		pid:      pid,
 		windowID: "w-" + sessionID,
 	}
 	f.Handles[sessionID] = st
@@ -51,6 +61,31 @@ func (f *Fake) FocusResume(_ context.Context, sessionID string) (bool, error) {
 	defer f.mu.Unlock()
 	st, ok := f.Handles[sessionID]
 	return ok && (st.process || st.window), nil
+}
+
+func (f *Fake) ExistingResume(_ context.Context, sessionID string) (Handle, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st, ok := f.Handles[sessionID]
+	if !ok || (!st.process && !st.window) {
+		return nil, false, nil
+	}
+	return waitHandle{fake: f, id: sessionID}, true, nil
+}
+
+func (f *Fake) SeedWindow(sessionID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.Handles[sessionID]; ok {
+		return
+	}
+	f.Handles[sessionID] = &fakeState{
+		wait:     make(chan struct{}),
+		process:  true,
+		window:   true,
+		pid:      4242,
+		windowID: "w-" + sessionID,
+	}
 }
 
 func (f *Fake) OpenDashboard(_ context.Context, _, cwd string) error {
@@ -170,6 +205,20 @@ func (h waitHandle) WindowID() string {
 		return st.windowID
 	}
 	return ""
+}
+
+func (h waitHandle) TTY() string {
+	if h.PID() == 0 && h.WindowID() == "" {
+		return ""
+	}
+	return "/dev/ttys001"
+}
+
+func (h waitHandle) Focus() (bool, error) {
+	h.fake.mu.Lock()
+	defer h.fake.mu.Unlock()
+	st := h.fake.Handles[h.id]
+	return st != nil && (st.process || st.window), nil
 }
 
 func (h waitHandle) Close() error {

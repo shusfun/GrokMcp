@@ -15,6 +15,11 @@ type Backend interface {
 	SetView(ctx context.Context, req protocol.SetViewRequest) (protocol.Job, error)
 	Status(ctx context.Context, jobID string) (protocol.Job, error)
 	ListJobs(ctx context.Context) ([]protocol.Job, error)
+	ListJobsPage(ctx context.Context, q protocol.ListJobsQuery) (protocol.JobPage, error)
+	ListProjects(ctx context.Context, includeArchived bool) ([]string, error)
+	ArchiveJob(ctx context.Context, jobID string) (protocol.Job, error)
+	UnarchiveJob(ctx context.Context, jobID string) (protocol.Job, error)
+	DeleteJob(ctx context.Context, jobID string) error
 	OpenTerminal(ctx context.Context, req protocol.OpenTerminalRequest) error
 	OpenProject(ctx context.Context, jobID string) error
 	Continue(ctx context.Context, jobID string) (protocol.Job, error)

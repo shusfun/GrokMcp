@@ -40,6 +40,7 @@ export type Job = {
   elapsed_seconds: number;
   created_at: string;
   updated_at: string;
+  archived_at?: string;
 };
 
 export type JobFilters = {
@@ -47,6 +48,23 @@ export type JobFilters = {
   state: string;
   project: string;
   view: string;
+  include_archived: boolean;
+};
+
+export type ListJobsQuery = {
+  cursor?: string;
+  limit?: number;
+  include_archived?: boolean;
+  query?: string;
+  state?: string;
+  project?: string;
+  view?: string;
+};
+
+export type JobPage = {
+  jobs: Job[];
+  next_cursor?: string;
+  has_more: boolean;
 };
 
 const STAGE: Record<JobState, string> = {
@@ -93,21 +111,8 @@ export function formatElapsed(seconds: number): string {
 
 const WORKING: JobState[] = ["planning", "executing", "starting", "recovering"];
 const ATTENTION: JobState[] = ["needs_input", "plan_ready"];
-
-const STATE_RANK: Record<string, number> = {
-  needs_input: 0,
-  plan_ready: 1,
-  blocked: 2,
-  executing: 3,
-  planning: 4,
-  starting: 5,
-  recovering: 6,
-  disconnected: 7,
-  failed: 8,
-  cancelled: 9,
-  completed: 10,
-  created: 11,
-};
+const ACTIVE: JobState[] = ["starting", "planning", "executing", "recovering", "plan_ready", "needs_input", "disconnected"];
+const HISTORY: JobState[] = ["completed", "cancelled", "failed", "blocked"];
 
 function matchesState(job: Job, state: string): boolean {
   if (!state || state === "all") return true;
@@ -129,12 +134,52 @@ export function filterJobs(jobs: Job[], filters: JobFilters): Job[] {
   });
 }
 
+export function dashboardActive(state: string): boolean {
+  return ACTIVE.includes(state as JobState);
+}
+
+export function dashboardHistory(state: string): boolean {
+  return HISTORY.includes(state as JobState);
+}
+
+export function activeGroup(state: string): number {
+  return dashboardActive(state) ? 1 : 0;
+}
+
+function unixSeconds(iso: string): number {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 0;
+  return Math.floor(t / 1000);
+}
+
+export function compareJobs(a: Job, b: Job): number {
+  const group = activeGroup(b.state) - activeGroup(a.state);
+  if (group !== 0) return group;
+  const updated = unixSeconds(b.updated_at) - unixSeconds(a.updated_at);
+  if (updated !== 0) return updated;
+  const created = unixSeconds(b.created_at) - unixSeconds(a.created_at);
+  if (created !== 0) return created;
+  if (b.job_id === a.job_id) return 0;
+  return b.job_id > a.job_id ? 1 : -1;
+}
+
 export function sortJobs(jobs: Job[]): Job[] {
-  return [...jobs].sort((a, b) => {
-    const rank = (STATE_RANK[a.state] ?? 50) - (STATE_RANK[b.state] ?? 50);
-    if (rank !== 0) return rank;
-    return b.elapsed_seconds - a.elapsed_seconds;
-  });
+  return [...jobs].sort(compareJobs);
+}
+
+export function mergeJobs(loaded: Job[], incoming: Job[]): Job[] {
+  const map = new Map<string, Job>();
+  for (const job of loaded) map.set(job.job_id, job);
+  for (const job of incoming) map.set(job.job_id, job);
+  return sortJobs([...map.values()]);
+}
+
+export function canArchive(job: Job): boolean {
+  return !job.archived_at && !dashboardActive(job.state);
+}
+
+export function canDelete(job: Job): boolean {
+  return !dashboardActive(job.state);
 }
 
 export function summarizeStatus(jobs: Job[]) {

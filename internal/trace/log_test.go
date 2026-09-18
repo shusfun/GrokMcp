@@ -98,6 +98,32 @@ func TestRestartReadsTraceFile(t *testing.T) {
 	}
 }
 
+func TestRemoveDeletesFileAndMemory(t *testing.T) {
+	dir := t.TempDir()
+	l, err := Open(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.SetDebug("j1", true, false)
+	l.Emit(Event{JobID: "j1", Level: LevelInfo, Source: SourceSupervisor, Name: "job.created"})
+	path := filepath.Join(dir, "traces", "j1.jsonl")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Remove("j1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("trace file remains: %v", err)
+	}
+	if l.Cursor("j1") != 0 {
+		t.Fatal("memory cursor leftover")
+	}
+	if err := l.Remove("j1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWriteFailureDoesNotPanic(t *testing.T) {
 	dir := t.TempDir()
 	l, err := Open(dir, time.Now)

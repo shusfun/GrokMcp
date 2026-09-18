@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -81,5 +82,119 @@ func TestDebugSettingsRoundTrip(t *testing.T) {
 	}
 	if !got.DebugEnabled || !got.DebugPayloads {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func putJob(t *testing.T, s *Store, j protocol.Job) {
+	t.Helper()
+	if err := s.PutJob(Record{Job: j}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListJobsPageSortAndCursor(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sec := func(n int64) time.Time { return time.Unix(n, 0).UTC() }
+	jobs := []protocol.Job{
+		{JobID: "z", Cwd: "/tmp/z", Title: "z", State: protocol.StateExecuting, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, UpdatedAt: sec(100), CreatedAt: sec(50)},
+		{JobID: "a", Cwd: "/tmp/a", Title: "a", State: protocol.StateCompleted, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, UpdatedAt: sec(200), CreatedAt: sec(10)},
+		{JobID: "m", Cwd: "/tmp/m", Title: "m", State: protocol.StateNeedsInput, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, UpdatedAt: sec(90), CreatedAt: sec(80)},
+		{JobID: "c", Cwd: "/tmp/c", Title: "c", State: protocol.StateCreated, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, UpdatedAt: sec(300), CreatedAt: sec(300)},
+		{JobID: "f", Cwd: "/tmp/f", Title: "f", State: protocol.StateFailed, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, UpdatedAt: sec(250), CreatedAt: sec(20)},
+		{JobID: "y", Cwd: "/tmp/y", Title: "y", State: protocol.StateExecuting, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, UpdatedAt: sec(100), CreatedAt: sec(60)},
+		{JobID: "x", Cwd: "/tmp/x", Title: "x", State: protocol.StateExecuting, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, UpdatedAt: sec(100), CreatedAt: sec(60)},
+	}
+	for _, j := range jobs {
+		putJob(t, s, j)
+	}
+	page, next, more, err := s.ListJobsPage(protocol.ListJobsQuery{Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !more || next == "" || len(page) != 3 {
+		t.Fatalf("page1 len=%d more=%v next=%q", len(page), more, next)
+	}
+	got := []string{page[0].Job.JobID, page[1].Job.JobID, page[2].Job.JobID}
+	if !slices.Equal(got, []string{"y", "x", "z"}) {
+		t.Fatalf("page1 %v", got)
+	}
+	page2, next2, more2, err := s.ListJobsPage(protocol.ListJobsQuery{Limit: 3, Cursor: next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = []string{page2[0].Job.JobID, page2[1].Job.JobID, page2[2].Job.JobID}
+	if !slices.Equal(got, []string{"m", "c", "f"}) {
+		t.Fatalf("page2 %v", got)
+	}
+	if !more2 || next2 == "" {
+		t.Fatal("expected more after page2")
+	}
+	page3, _, more3, err := s.ListJobsPage(protocol.ListJobsQuery{Limit: 3, Cursor: next2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if more3 || len(page3) != 1 || page3[0].Job.JobID != "a" {
+		t.Fatalf("page3 %+v more=%v", page3, more3)
+	}
+	if protocol.ActiveGroup(page2[1].Job.State) != 0 || page2[1].Job.State != protocol.StateCreated {
+		t.Fatal("created must not be active")
+	}
+}
+
+func TestListJobsPageHidesArchivedAndFilters(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(10, 0).UTC()
+	putJob(t, s, protocol.Job{JobID: "live", Cwd: "/tmp/auth", Title: "登录", State: protocol.StateCompleted, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, CreatedAt: now, UpdatedAt: now})
+	putJob(t, s, protocol.Job{JobID: "old", Cwd: "/tmp/auth", Title: "旧", State: protocol.StateFailed, ViewMode: protocol.ViewHeaded, InputOwner: protocol.OwnerSupervisor, CreatedAt: now, UpdatedAt: now, ArchivedAt: now})
+	page, _, more, err := s.ListJobsPage(protocol.ListJobsQuery{Limit: 10})
+	if err != nil || more || len(page) != 1 || page[0].Job.JobID != "live" {
+		t.Fatalf("default %+v %v %v", page, more, err)
+	}
+	arch, _, _, err := s.ListJobsPage(protocol.ListJobsQuery{Limit: 10, IncludeArchived: true})
+	if err != nil || len(arch) != 1 || arch[0].Job.JobID != "old" {
+		t.Fatalf("archived %+v %v", arch, err)
+	}
+	q, _, _, err := s.ListJobsPage(protocol.ListJobsQuery{Limit: 10, Query: "登录", Project: "auth"})
+	if err != nil || len(q) != 1 || q[0].Job.JobID != "live" {
+		t.Fatalf("query %+v %v", q, err)
+	}
+	headed, _, _, err := s.ListJobsPage(protocol.ListJobsQuery{Limit: 10, IncludeArchived: true, View: "headed"})
+	if err != nil || len(headed) != 1 || headed[0].Job.JobID != "old" {
+		t.Fatalf("view %+v %v", headed, err)
+	}
+}
+
+func TestDeleteJobRemovesEventsKeepsOthers(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(10, 0).UTC()
+	putJob(t, s, protocol.Job{JobID: "j1", Cwd: "/tmp/p", Title: "a", State: protocol.StateFailed, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, CreatedAt: now, UpdatedAt: now})
+	putJob(t, s, protocol.Job{JobID: "j2", Cwd: "/tmp/p", Title: "b", State: protocol.StateFailed, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, CreatedAt: now, UpdatedAt: now})
+	if err := s.AddEvent("j1", "failed", "x", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteJob("j1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetJob("j1"); err == nil {
+		t.Fatal("j1 still present")
+	}
+	ev, err := s.Events("j1", 5)
+	if err != nil || len(ev) != 0 {
+		t.Fatalf("events leftover %+v %v", ev, err)
+	}
+	if _, err := s.GetJob("j2"); err != nil {
+		t.Fatal(err)
 	}
 }

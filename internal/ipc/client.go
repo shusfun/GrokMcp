@@ -117,6 +117,22 @@ func (c *Client) Status(ctx context.Context, jobID string) (protocol.Job, error)
 func (c *Client) ListJobs(ctx context.Context) ([]protocol.Job, error) {
 	return decode[[]protocol.Job](c.call(ctx, "listJobs", struct{}{}))
 }
+func (c *Client) ListJobsPage(ctx context.Context, q protocol.ListJobsQuery) (protocol.JobPage, error) {
+	return decode[protocol.JobPage](c.call(ctx, "listJobsPage", q))
+}
+func (c *Client) ListProjects(ctx context.Context, includeArchived bool) ([]string, error) {
+	return decode[[]string](c.call(ctx, "listProjects", map[string]bool{"include_archived": includeArchived}))
+}
+func (c *Client) ArchiveJob(ctx context.Context, jobID string) (protocol.Job, error) {
+	return decode[protocol.Job](c.call(ctx, "archiveJob", map[string]string{"job_id": jobID}))
+}
+func (c *Client) UnarchiveJob(ctx context.Context, jobID string) (protocol.Job, error) {
+	return decode[protocol.Job](c.call(ctx, "unarchiveJob", map[string]string{"job_id": jobID}))
+}
+func (c *Client) DeleteJob(ctx context.Context, jobID string) error {
+	_, err := c.call(ctx, "deleteJob", map[string]string{"job_id": jobID})
+	return err
+}
 func (c *Client) OpenTerminal(ctx context.Context, req protocol.OpenTerminalRequest) error {
 	_, err := c.call(ctx, "openTerminal", req)
 	return err

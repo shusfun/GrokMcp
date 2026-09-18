@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { Job, JobFilters as Filters } from "../lib/jobs";
-import { projectOptions, summarizeStatus } from "../lib/jobs";
+import { summarizeStatus } from "../lib/jobs";
 import { cn } from "../lib/cn";
 import { Command } from "./ui/command";
 import { Select } from "./ui/select";
@@ -46,8 +46,17 @@ function Chip({
   );
 }
 
-export function JobFilters({ jobs, value, onChange }: { jobs: Job[]; value: Filters; onChange: (v: Filters) => void }) {
-  const projects = projectOptions(jobs);
+export function JobFilters({
+  jobs,
+  projects = [],
+  value,
+  onChange,
+}: {
+  jobs: Job[];
+  projects?: string[];
+  value: Filters;
+  onChange: (v: Filters) => void;
+}) {
   const sum = summarizeStatus(jobs);
   const toggle = (state: string) => onChange({ ...value, state: value.state === state ? "all" : state });
   return (
@@ -56,6 +65,7 @@ export function JobFilters({ jobs, value, onChange }: { jobs: Job[]; value: Filt
         <Command value={value.query} onChange={(query) => onChange({ ...value, query })} placeholder="搜索任务" />
         <Chip active={value.state === "attention"} onClick={() => toggle("attention")}>需输入 {sum.needsInput}</Chip>
         <Chip active={value.state === "working"} onClick={() => toggle("working")}>工作 {sum.working}</Chip>
+        <Chip active={value.include_archived} onClick={() => onChange({ ...value, include_archived: !value.include_archived })}>归档</Chip>
       </div>
       <div className="flex gap-2">
         <Select aria-label="状态" className="min-w-0 flex-1" value={value.state} options={STATES} onChange={(state) => onChange({ ...value, state })} />

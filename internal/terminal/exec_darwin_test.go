@@ -21,6 +21,89 @@ func writeResumeStub(t *testing.T) string {
 	return path
 }
 
+func writeKeepResumeStub(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "grokstub")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nsleep 86400\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLiveHeadedRequiresPIDWindowTTY(t *testing.T) {
+	if testing.Short() || os.Getenv("GROK_LIVE") != "1" {
+		t.Skip("set GROK_LIVE=1 to open Terminal.app")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	e := Exec{}
+	h, err := e.OpenResume(ctx, writeKeepResumeStub(t), "livetty01", "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.PID() > 0 && h.WindowID() != "" && h.TTY() != "" {
+			ok, err := h.(*tabHandle).Focus()
+			if err == nil && ok {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("pid=%d window=%q tty=%q", h.PID(), h.WindowID(), h.TTY())
+}
+
+func TestLiveNoDuplicateResumeSameSession(t *testing.T) {
+	if testing.Short() || os.Getenv("GROK_LIVE") != "1" {
+		t.Skip("set GROK_LIVE=1 to open Terminal.app")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	session := "livedup02"
+	e := Exec{}
+	stub := writeKeepResumeStub(t)
+	h1, err := e.OpenResume(ctx, stub, session, "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h1.Close() })
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) && FindResumePID(session) == 0 {
+		time.Sleep(50 * time.Millisecond)
+	}
+	first := FindResumePID(session)
+	if first == 0 {
+		t.Fatal("expected resume pid")
+	}
+	h2, ok, err := e.ExistingResume(ctx, session)
+	if err != nil || !ok || h2 == nil {
+		t.Fatalf("existing %v %v %v", h2, ok, err)
+	}
+	if FindResumePID(session) != first {
+		t.Fatal("duplicate grok --resume")
+	}
+	if countResumePIDs(session) != 1 {
+		t.Fatalf("duplicate resume pids")
+	}
+}
+
+func countResumePIDs(sessionID string) int {
+	out, err := exec.Command("ps", "-ax", "-o", "pid=,command=").Output()
+	if err != nil {
+		return 0
+	}
+	needle := "--resume " + sessionID
+	n := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, needle) {
+			n++
+		}
+	}
+	return n
+}
+
 func TestOpenResumeWaitUntilTabClosed(t *testing.T) {
 	if testing.Short() || os.Getenv("GROK_LIVE") != "1" {
 		t.Skip("set GROK_LIVE=1 to open Terminal.app")

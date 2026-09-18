@@ -20,6 +20,17 @@ func (e Exec) spawn(_ context.Context, cwd, command, sessionID string) (Handle, 
 	return procHandle{cmd: cmd, sessionID: sessionID}, nil
 }
 
+func (e Exec) ExistingResume(_ context.Context, sessionID string) (Handle, bool, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, false, nil
+	}
+	pid := FindResumePID(sessionID)
+	if pid == 0 {
+		return nil, false, nil
+	}
+	return procHandle{sessionID: sessionID, grokPID: pid}, true, nil
+}
+
 func (e Exec) focus(context.Context, string) (bool, error) {
 	return false, nil
 }

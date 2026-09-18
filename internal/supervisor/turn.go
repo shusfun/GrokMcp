@@ -148,9 +148,9 @@ func (s *Service) Continue(_ context.Context, jobID string) (protocol.Job, error
 	}
 	if job.State == protocol.StateNeedsInput || job.State == protocol.StateBlocked {
 		job.State = protocol.StateExecuting
-		s.touch(&job)
-		s.save(job)
 	}
+	s.touch(&job)
+	s.save(job)
 	s.enqueue(jobID, queued{kind: "continue", text: protocol.ContinuePrompt()})
 	return s.snapshot(jobID), nil
 }

@@ -96,7 +96,11 @@ func Run(backend core.Backend) error {
 
 	backend.Subscribe(func(ev protocol.Event) {
 		app.Event.Emit("jobs:changed", ev)
-		host.onJob(ev.Job)
+		if ev.Type == "job.deleted" {
+			host.forget(ev.JobID)
+		} else {
+			host.onJob(ev.Job)
+		}
 		host.refresh()
 	})
 	if ts, ok := backend.(interface {
@@ -178,6 +182,15 @@ func (h *trayHost) refresh() {
 	default:
 		h.tray.SetLabel("Grok")
 	}
+}
+
+func (h *trayHost) forget(jobID string) {
+	if jobID == "" {
+		return
+	}
+	h.mu.Lock()
+	delete(h.last, jobID)
+	h.mu.Unlock()
 }
 
 func (h *trayHost) onJob(job *protocol.Job) {

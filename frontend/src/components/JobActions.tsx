@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Copy, FolderOpen, MoreHorizontal } from "lucide-react";
-import { canControlTurn, type Job } from "../lib/jobs";
+import { canArchive, canControlTurn, canDelete, type Job } from "../lib/jobs";
+import { confirmPermanentDelete } from "../lib/confirm";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { DropdownItem, DropdownMenu } from "./ui/dropdown-menu";
@@ -17,9 +18,12 @@ type Props = {
   onTrace?: () => void;
   onExport?: () => void;
   onCopyState?: () => void;
+  onArchive?: () => void;
+  onUnarchive?: () => void;
+  onDelete?: () => void;
 };
 
-export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, onOpenDir, onPlanDecide, onDebug, onTrace, onExport, onCopyState }: Props) {
+export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, onOpenDir, onPlanDecide, onDebug, onTrace, onExport, onCopyState, onArchive, onUnarchive, onDelete }: Props) {
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -76,6 +80,18 @@ export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, o
           {onTrace ? <DropdownItem onClick={() => run(onTrace)}>查看 Trace</DropdownItem> : null}
           {onExport ? <DropdownItem onClick={() => run(onExport)}>导出诊断包</DropdownItem> : null}
           {onCopyState ? <DropdownItem onClick={() => run(onCopyState)}>复制内部状态</DropdownItem> : null}
+          {onArchive && canArchive(job) ? <DropdownItem onClick={() => run(onArchive)}>归档</DropdownItem> : null}
+          {onUnarchive && job.archived_at ? <DropdownItem onClick={() => run(onUnarchive)}>取消归档</DropdownItem> : null}
+          {onDelete && canDelete(job) ? (
+            <DropdownItem
+              onClick={() => run(async () => {
+                if (!(await confirmPermanentDelete(job.title))) return;
+                await onDelete();
+              })}
+            >
+              永久删除
+            </DropdownItem>
+          ) : null}
         </DropdownMenu>
       </div>
       {error ? <p className="text-sm text-[var(--fail)]">{error}</p> : null}

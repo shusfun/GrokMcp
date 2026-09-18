@@ -32,6 +32,17 @@ func (stub) SetView(context.Context, protocol.SetViewRequest) (protocol.Job, err
 }
 func (stub) Status(context.Context, string) (protocol.Job, error) { return protocol.Job{}, nil }
 func (stub) ListJobs(context.Context) ([]protocol.Job, error)     { return nil, nil }
+func (stub) ListJobsPage(context.Context, protocol.ListJobsQuery) (protocol.JobPage, error) {
+	return protocol.JobPage{}, nil
+}
+func (stub) ListProjects(context.Context, bool) ([]string, error) { return nil, nil }
+func (stub) ArchiveJob(context.Context, string) (protocol.Job, error) {
+	return protocol.Job{}, nil
+}
+func (stub) UnarchiveJob(context.Context, string) (protocol.Job, error) {
+	return protocol.Job{}, nil
+}
+func (stub) DeleteJob(context.Context, string) error { return nil }
 func (stub) OpenTerminal(context.Context, protocol.OpenTerminalRequest) error {
 	return nil
 }

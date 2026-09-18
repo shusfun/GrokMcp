@@ -1,4 +1,4 @@
-import type { Job } from "../lib/jobs";
+import type { Job, JobPage } from "../lib/jobs";
 import type { BoundaryEvent, Client, DebugSnapshot } from "./client";
 
 const service = "grokmcp/internal/app.Service";
@@ -22,6 +22,13 @@ async function call<T>(method: string, ...args: unknown[]): Promise<T> {
 
 export const wailsClient: Client = {
   listJobs: async () => (await call<Job[] | null>("ListJobs")) ?? [],
+  listJobsPage: async (q) =>
+    (await call<JobPage | null>("ListJobsPage", q.cursor ?? "", q.limit ?? 40, Boolean(q.include_archived), q.query ?? "", q.state ?? "all", q.project ?? "all", q.view ?? "all"))
+    ?? { jobs: [], has_more: false },
+  listProjects: async (includeArchived) => (await call<string[] | null>("ListProjects", Boolean(includeArchived))) ?? [],
+  archiveJob: (id) => call("ArchiveJob", id),
+  unarchiveJob: (id) => call("UnarchiveJob", id),
+  deleteJob: (id) => call("DeleteJob", id),
   status: (id) => call("Status", id),
   events: async (id) => (await call<BoundaryEvent[] | null>("Events", id)) ?? [],
   statusBar: () => call("StatusBar"),

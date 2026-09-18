@@ -81,6 +81,7 @@ type Job struct {
 	UserCancelled    bool       `json:"user_cancelled"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
+	ArchivedAt       time.Time  `json:"archived_at,omitempty"`
 	ElapsedSeconds   int64      `json:"elapsed_seconds"`
 	DebugEnabled     bool       `json:"debug_enabled,omitempty"`
 	DebugCursor      int64      `json:"debug_cursor,omitempty"`
@@ -246,6 +247,23 @@ type StatusBar struct {
 }
 
 type Event struct {
-	Type string `json:"type"`
-	Job  *Job   `json:"job,omitempty"`
+	Type  string `json:"type"`
+	Job   *Job   `json:"job,omitempty"`
+	JobID string `json:"job_id,omitempty"`
+}
+
+type ListJobsQuery struct {
+	Cursor          string `json:"cursor,omitempty"`
+	Limit           int    `json:"limit,omitempty"`
+	IncludeArchived bool   `json:"include_archived,omitempty"`
+	Query           string `json:"query,omitempty"`
+	State           string `json:"state,omitempty"`
+	Project         string `json:"project,omitempty"`
+	View            string `json:"view,omitempty"`
+}
+
+type JobPage struct {
+	Jobs       []Job  `json:"jobs"`
+	NextCursor string `json:"next_cursor,omitempty"`
+	HasMore    bool   `json:"has_more"`
 }

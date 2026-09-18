@@ -1,4 +1,4 @@
-import type { Job } from "../lib/jobs";
+import type { Job, JobPage, ListJobsQuery } from "../lib/jobs";
 
 export type Settings = {
   grok_binary_path: string;
@@ -82,6 +82,11 @@ export type UpdateRelease = {
 
 export type Client = {
   listJobs(): Promise<Job[]>;
+  listJobsPage(q: ListJobsQuery): Promise<JobPage>;
+  listProjects(includeArchived?: boolean): Promise<string[]>;
+  archiveJob(jobId: string): Promise<Job>;
+  unarchiveJob(jobId: string): Promise<Job>;
+  deleteJob(jobId: string): Promise<void>;
   status(jobId: string): Promise<Job>;
   events(jobId: string): Promise<BoundaryEvent[]>;
   statusBar(): Promise<StatusBar>;

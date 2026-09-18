@@ -149,6 +149,48 @@ func (s *Server) dispatch(ctx context.Context, req Request) (json.RawMessage, er
 	case "listJobs":
 		out, err := s.svc.ListJobs(ctx)
 		return marshal(out, err)
+	case "listJobsPage":
+		var in protocol.ListJobsQuery
+		if len(req.Params) > 0 {
+			if err := json.Unmarshal(req.Params, &in); err != nil {
+				return nil, err
+			}
+		}
+		out, err := s.svc.ListJobsPage(ctx, in)
+		return marshal(out, err)
+	case "listProjects":
+		var in struct {
+			IncludeArchived bool `json:"include_archived"`
+		}
+		_ = json.Unmarshal(req.Params, &in)
+		out, err := s.svc.ListProjects(ctx, in.IncludeArchived)
+		return marshal(out, err)
+	case "archiveJob":
+		var in struct {
+			JobID string `json:"job_id"`
+		}
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.ArchiveJob(ctx, in.JobID)
+		return marshal(out, err)
+	case "unarchiveJob":
+		var in struct {
+			JobID string `json:"job_id"`
+		}
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.UnarchiveJob(ctx, in.JobID)
+		return marshal(out, err)
+	case "deleteJob":
+		var in struct {
+			JobID string `json:"job_id"`
+		}
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		return marshal(struct{}{}, s.svc.DeleteJob(ctx, in.JobID))
 	case "openTerminal":
 		var in protocol.OpenTerminalRequest
 		if err := json.Unmarshal(req.Params, &in); err != nil {

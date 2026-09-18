@@ -55,6 +55,9 @@ export function SessionDetail({ jobId }: { jobId: string }) {
           onTrace={() => navigate(`/diagnostics?job=${encodeURIComponent(job.job_id)}`)}
           onExport={() => client.debugExport(job.job_id)}
           onCopyState={() => void navigator.clipboard.writeText(JSON.stringify(job, null, 2))}
+          onArchive={() => client.archiveJob(job.job_id).then(setJob)}
+          onUnarchive={() => client.unarchiveJob(job.job_id).then(setJob)}
+          onDelete={() => client.deleteJob(job.job_id).then(() => navigate("/"))}
         />
       </div>
       {job.plan_summary ? (

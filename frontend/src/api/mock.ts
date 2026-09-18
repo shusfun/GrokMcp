@@ -1,4 +1,5 @@
-import type { Job } from "../lib/jobs";
+import type { Job, JobPage } from "../lib/jobs";
+import { sortJobs } from "../lib/jobs";
 import type { BoundaryEvent, Client, DebugSnapshot, Diagnose, InstallResult, Settings, StatusBar, TraceEvent } from "./client";
 
 const jobs: Job[] = [
@@ -112,6 +113,55 @@ function find(id: string): Job {
 export const mockClient: Client = {
   async listJobs() {
     return jobs.map((j) => ({ ...j }));
+  },
+  async listJobsPage(q): Promise<JobPage> {
+    const includeArchived = Boolean(q.include_archived);
+    let list = jobs.filter((j) => includeArchived ? Boolean(j.archived_at) : !j.archived_at);
+    const query = (q.query ?? "").trim().toLowerCase();
+    if (q.state && q.state !== "all") {
+      if (q.state === "attention") list = list.filter((j) => j.state === "plan_ready" || j.state === "needs_input");
+      else if (q.state === "working") list = list.filter((j) => ["planning", "executing", "starting", "recovering"].includes(j.state));
+      else list = list.filter((j) => j.state === q.state);
+    }
+    if (q.project && q.project !== "all") list = list.filter((j) => j.project === q.project);
+    if (q.view && q.view !== "all") list = list.filter((j) => j.view_mode === q.view);
+    if (query) {
+      list = list.filter((j) => [j.title, j.project, j.last_action, j.grok_session_id].filter(Boolean).some((v) => String(v).toLowerCase().includes(query)));
+    }
+    list = sortJobs(list);
+    const limit = q.limit && q.limit > 0 ? q.limit : 40;
+    const start = q.cursor ? list.findIndex((j) => j.job_id === q.cursor) + 1 : 0;
+    const slice = list.slice(Math.max(0, start), Math.max(0, start) + limit);
+    const hasMore = Math.max(0, start) + slice.length < list.length;
+    return { jobs: slice.map((j) => ({ ...j })), next_cursor: hasMore ? slice.at(-1)?.job_id : "", has_more: hasMore };
+  },
+  async listProjects() {
+    return [...new Set(jobs.map((j) => j.project).filter(Boolean))].sort();
+  },
+  async archiveJob(jobId) {
+    const job = find(jobId);
+    if (["starting", "planning", "executing", "recovering", "plan_ready", "needs_input", "disconnected"].includes(job.state)) {
+      throw new Error("cannot archive active job");
+    }
+    job.archived_at = new Date().toISOString();
+    emit();
+    return { ...job };
+  },
+  async unarchiveJob(jobId) {
+    const job = find(jobId);
+    job.archived_at = undefined;
+    emit();
+    return { ...job };
+  },
+  async deleteJob(jobId) {
+    const idx = jobs.findIndex((j) => j.job_id === jobId);
+    if (idx < 0) return;
+    const job = jobs[idx];
+    if (["starting", "planning", "executing", "recovering", "plan_ready", "needs_input", "disconnected"].includes(job.state)) {
+      throw new Error("cannot delete active job");
+    }
+    jobs.splice(idx, 1);
+    emit();
   },
   async status(jobId) {
     return { ...find(jobId) };

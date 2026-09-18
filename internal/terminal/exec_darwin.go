@@ -53,6 +53,27 @@ end tell`, appleQuote(inner), appleQuote(title))
 	return h, nil
 }
 
+func (e Exec) ExistingResume(ctx context.Context, sessionID string) (Handle, bool, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, false, nil
+	}
+	title := SessionTitle(sessionID)
+	focused, _ := e.focus(ctx, title)
+	pid := FindResumePID(sessionID)
+	if !focused && pid == 0 {
+		return nil, false, nil
+	}
+	id := ""
+	if v, ok := tabIDs.Load(title); ok {
+		id, _ = v.(string)
+	}
+	h := &tabHandle{id: id, title: title, sessionID: sessionID, grokPID: pid}
+	if pid > 0 {
+		h.foundGrok = true
+	}
+	return h, true, nil
+}
+
 func (e Exec) focus(ctx context.Context, title string) (bool, error) {
 	if v, ok := tabIDs.Load(title); ok {
 		if id, _ := v.(string); focusByID(ctx, id) {
@@ -102,6 +123,8 @@ func (h *tabHandle) PID() int {
 }
 
 func (h *tabHandle) WindowID() string { return h.id }
+
+func (h *tabHandle) TTY() string { return h.tty }
 
 func (h *tabHandle) Close() error {
 	if pid := h.PID(); pid > 0 {

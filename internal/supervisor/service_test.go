@@ -18,7 +18,7 @@ import (
 	"grokmcp/internal/trace"
 )
 
-func newTest(t *testing.T, fake *agent.Fake, term *terminal.Fake) *Service {
+func newTest(t *testing.T, fake *agent.Fake, term terminal.Launcher) *Service {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
 	if err != nil {

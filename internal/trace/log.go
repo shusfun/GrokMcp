@@ -303,6 +303,24 @@ func (l *Log) Export(jobID string) (string, error) {
 	return dst, nil
 }
 
+func (l *Log) Remove(jobID string) error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	delete(l.seq, jobID)
+	delete(l.mem, jobID)
+	delete(l.dbg, jobID)
+	delete(l.override, jobID)
+	path := l.tracePath(jobID)
+	l.mu.Unlock()
+	err := os.Remove(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func (l *Log) Close() {
 	if l == nil {
 		return

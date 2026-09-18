@@ -65,6 +65,8 @@ func (h procHandle) PID() int {
 
 func (h procHandle) WindowID() string { return h.windowID }
 
+func (h procHandle) TTY() string { return "" }
+
 func (h procHandle) Close() error {
 	pid := h.PID()
 	if pid > 0 {
