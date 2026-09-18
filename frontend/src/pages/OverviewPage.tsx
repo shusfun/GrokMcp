@@ -1,1 +1,1 @@
-export { WorkbenchPage as OverviewPage } from "./WorkbenchPage";
+export { ProjectsPage as OverviewPage } from "./ProjectsPage";

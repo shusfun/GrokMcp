@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -211,6 +212,13 @@ func (s *Service) Dispatch(ctx context.Context, req protocol.DispatchRequest) (p
 		return protocol.DispatchResult{}, err
 	}
 	base := req.Cwd
+	if strings.TrimSpace(req.ProjectID) != "" {
+		if p, err := s.store.GetProject(req.ProjectID); err != nil {
+			return protocol.DispatchResult{}, projectNotFound(err, req.ProjectID)
+		} else if base == "" {
+			base = p.Root
+		}
+	}
 	if base == "" {
 		wd, err := os.Getwd()
 		if err != nil {
@@ -221,17 +229,32 @@ func (s *Service) Dispatch(ctx context.Context, req protocol.DispatchRequest) (p
 	var jobs []protocol.Job
 	for _, task := range req.Tasks {
 		cwd := task.Cwd
-		if cwd == "" {
-			cwd = base
-		}
 		title := task.Title
 		if title == "" {
 			title = textutil.TruncateTitle(task.Prompt, 32)
 		}
+		pid := strings.TrimSpace(task.ProjectID)
+		if pid == "" {
+			pid = strings.TrimSpace(req.ProjectID)
+		}
+		if cwd == "" {
+			if pid != "" {
+				if p, err := s.store.GetProject(pid); err == nil {
+					cwd = p.Root
+				}
+			}
+			if cwd == "" {
+				cwd = base
+			}
+		}
+		proj, err := s.bindProject(pid, cwd)
+		if err != nil {
+			return protocol.DispatchResult{}, err
+		}
 		now := s.clock.Now()
 		job := protocol.Job{
-			JobID: s.ids.JobID(), CodexThreadID: task.CodexThreadID, Cwd: cwd,
-			Project: textutil.ProjectName(cwd), Title: title, State: protocol.StateCreated,
+			JobID: s.ids.JobID(), CodexThreadID: task.CodexThreadID, Cwd: cwd, ProjectID: proj.ProjectID,
+			Project: proj.Name, Title: title, State: protocol.StateCreated,
 			ViewMode: protocol.ViewHeadless, DesiredViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor,
 			CreatedAt: now, UpdatedAt: now,
 		}
@@ -390,7 +413,9 @@ func (s *Service) record(id string) (store.Record, error) {
 }
 
 func (s *Service) put(job protocol.Job, missing int, fails []int64) error {
-	job.Project = textutil.ProjectName(job.Cwd)
+	if job.Project == "" {
+		job.Project = textutil.ProjectName(job.Cwd)
+	}
 	return s.store.PutJob(store.Record{Job: job, MissingMarkerCount: missing, RecoverFails: fails})
 }
 
@@ -406,7 +431,9 @@ func (s *Service) save(job protocol.Job) {
 
 func (s *Service) touch(job *protocol.Job) {
 	job.UpdatedAt = s.clock.Now()
-	job.Project = textutil.ProjectName(job.Cwd)
+	if job.Project == "" {
+		job.Project = textutil.ProjectName(job.Cwd)
+	}
 	job.ElapsedSeconds = textutil.ElapsedSeconds(job.CreatedAt, job.UpdatedAt)
 }
 
@@ -445,7 +472,9 @@ func (s *Service) decorate(job protocol.Job) protocol.Job {
 		job.DebugEnabled = dbg.Enabled
 		job.DebugCursor = s.traces.Cursor(job.JobID)
 	}
-	job.Project = textutil.ProjectName(job.Cwd)
+	if job.Project == "" {
+		job.Project = textutil.ProjectName(job.Cwd)
+	}
 	job.ElapsedSeconds = textutil.ElapsedSeconds(job.CreatedAt, s.clock.Now())
 	return job
 }

@@ -1,4 +1,5 @@
 import type { Job, JobPage } from "../lib/jobs";
+import type { Project, PromptResult } from "../lib/projects";
 import type { BoundaryEvent, Client, DebugSnapshot } from "./client";
 
 const service = "grokmcp/internal/app.Service";
@@ -25,7 +26,18 @@ export const wailsClient: Client = {
   listJobsPage: async (q) =>
     (await call<JobPage | null>("ListJobsPage", q.cursor ?? "", q.limit ?? 40, Boolean(q.include_archived), q.query ?? "", q.state ?? "all", q.project ?? "all", q.view ?? "all"))
     ?? { jobs: [], has_more: false },
-  listProjects: async (includeArchived) => (await call<string[] | null>("ListProjects", Boolean(includeArchived))) ?? [],
+  importProject: (path, installSkill = true) => call("ImportProject", path, Boolean(installSkill)),
+  listProjects: async () => (await call<Project[] | null>("ListProjects")) ?? [],
+  getProject: (id) => call("GetProject", id),
+  removeProject: (id) => call("RemoveProject", id),
+  skillStatus: (id) => call("SkillStatus", id),
+  skillInstall: (id) => call("SkillInstall", id),
+  skillUpdate: (id) => call("SkillUpdate", id),
+  skillRemove: (id) => call("SkillRemove", id),
+  generatePrompt: async (id, goal, constraints, acceptance) =>
+    (await call<PromptResult>("GeneratePrompt", id, goal ?? "", constraints ?? "", acceptance ?? "")),
+  savePrompt: (id, template) => call("SavePrompt", id, template),
+  openProjectDir: (id) => call("OpenProjectDir", id),
   archiveJob: (id) => call("ArchiveJob", id),
   unarchiveJob: (id) => call("UnarchiveJob", id),
   deleteJob: (id) => call("DeleteJob", id),

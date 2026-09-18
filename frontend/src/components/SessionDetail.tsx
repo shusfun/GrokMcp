@@ -33,7 +33,7 @@ export function SessionDetail({ jobId }: { jobId: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto p-4">
-      <Link to="/" className="mb-3 text-sm text-[var(--muted)] hover:text-[var(--accent)] min-[900px]:hidden">← 任务</Link>
+      <Link to={job.project_id ? `/projects/${job.project_id}` : "/"} className="mb-3 text-sm text-[var(--muted)] hover:text-[var(--accent)]">← {job.project_id ? "项目" : "总览"}</Link>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h1 className="text-base font-semibold">{job.title}</h1>
         <span className="text-sm text-[var(--muted)]">{stageViewLabel(job.state, job.view_mode)}</span>
@@ -57,7 +57,7 @@ export function SessionDetail({ jobId }: { jobId: string }) {
           onCopyState={() => void navigator.clipboard.writeText(JSON.stringify(job, null, 2))}
           onArchive={() => client.archiveJob(job.job_id).then(setJob)}
           onUnarchive={() => client.unarchiveJob(job.job_id).then(setJob)}
-          onDelete={() => client.deleteJob(job.job_id).then(() => navigate("/"))}
+          onDelete={() => client.deleteJob(job.job_id).then(() => navigate(job.project_id ? `/projects/${job.project_id}` : "/"))}
         />
       </div>
       {job.plan_summary ? (

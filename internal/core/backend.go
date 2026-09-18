@@ -16,7 +16,17 @@ type Backend interface {
 	Status(ctx context.Context, jobID string) (protocol.Job, error)
 	ListJobs(ctx context.Context) ([]protocol.Job, error)
 	ListJobsPage(ctx context.Context, q protocol.ListJobsQuery) (protocol.JobPage, error)
-	ListProjects(ctx context.Context, includeArchived bool) ([]string, error)
+	ImportProject(ctx context.Context, path string, installSkill bool) (protocol.Project, error)
+	ListProjects(ctx context.Context) ([]protocol.Project, error)
+	GetProject(ctx context.Context, projectID string) (protocol.Project, error)
+	RemoveProject(ctx context.Context, projectID string) (protocol.Project, error)
+	SkillStatus(ctx context.Context, projectID string) (protocol.Project, error)
+	SkillInstall(ctx context.Context, projectID string) (protocol.Project, error)
+	SkillUpdate(ctx context.Context, projectID string) (protocol.Project, error)
+	SkillRemove(ctx context.Context, projectID string) (protocol.Project, error)
+	GeneratePrompt(ctx context.Context, req protocol.GeneratePromptRequest) (protocol.PromptResult, error)
+	SavePrompt(ctx context.Context, req protocol.SavePromptRequest) (protocol.Project, error)
+	OpenProjectDir(ctx context.Context, projectID string) error
 	ArchiveJob(ctx context.Context, jobID string) (protocol.Job, error)
 	UnarchiveJob(ctx context.Context, jobID string) (protocol.Job, error)
 	DeleteJob(ctx context.Context, jobID string) error

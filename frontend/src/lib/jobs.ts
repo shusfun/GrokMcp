@@ -18,6 +18,7 @@ export type Job = {
   job_id: string;
   grok_session_id?: string;
   cwd: string;
+  project_id?: string;
   project: string;
   title: string;
   state: JobState;

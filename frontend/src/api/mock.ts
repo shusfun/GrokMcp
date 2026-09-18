@@ -1,5 +1,7 @@
 import type { Job, JobPage } from "../lib/jobs";
 import { sortJobs } from "../lib/jobs";
+import type { Project, PromptResult } from "../lib/projects";
+import { sortProjects } from "../lib/projects";
 import type { BoundaryEvent, Client, DebugSnapshot, Diagnose, InstallResult, Settings, StatusBar, TraceEvent } from "./client";
 
 const jobs: Job[] = [
@@ -7,6 +9,7 @@ const jobs: Job[] = [
     job_id: "job-runtime",
     grok_session_id: "11111111-1111-1111-1111-111111111111",
     cwd: "/tmp/suiyuan",
+    project_id: "proj-suiyuan",
     project: "suiyuan",
     title: "Runtime 底座",
     state: "executing",
@@ -22,6 +25,7 @@ const jobs: Job[] = [
     job_id: "job-auth",
     grok_session_id: "22222222-2222-2222-2222-222222222222",
     cwd: "/tmp/auth",
+    project_id: "proj-auth",
     project: "auth",
     title: "登录重构",
     state: "plan_ready",
@@ -37,6 +41,7 @@ const jobs: Job[] = [
     job_id: "job-ui",
     grok_session_id: "33333333-3333-3333-3333-333333333333",
     cwd: "/tmp/admin-web",
+    project_id: "proj-admin",
     project: "admin-web",
     title: "UI 测试",
     state: "needs_input",
@@ -52,6 +57,7 @@ const jobs: Job[] = [
     job_id: "job-cancelled",
     grok_session_id: "44444444-4444-4444-4444-444444444444",
     cwd: "/tmp/dash",
+    project_id: "proj-grokmcp",
     project: "GrokMcp",
     title: "Dashboard 可视化测试",
     state: "cancelled",
@@ -65,6 +71,41 @@ const jobs: Job[] = [
     updated_at: new Date().toISOString(),
   },
 ];
+
+const nowIso = () => new Date().toISOString();
+const projects: Project[] = [
+  { project_id: "proj-suiyuan", name: "suiyuan", root: "/tmp/suiyuan", canonical_path: "/tmp/suiyuan", imported: true, skill_status: "installed", skill_version: "1", created_at: nowIso(), updated_at: nowIso(), last_used_at: nowIso(), active_count: 1, needs_input_count: 0 },
+  { project_id: "proj-auth", name: "auth", root: "/tmp/auth", canonical_path: "/tmp/auth", imported: true, skill_status: "missing", created_at: nowIso(), updated_at: nowIso(), last_used_at: nowIso(), active_count: 1, needs_input_count: 1 },
+  { project_id: "proj-admin", name: "admin-web", root: "/tmp/admin-web", canonical_path: "/tmp/admin-web", imported: false, skill_status: "conflict", skill_message: "同路径已有用户文件，未覆盖。", created_at: nowIso(), updated_at: nowIso(), last_used_at: nowIso(), active_count: 1, needs_input_count: 1 },
+  { project_id: "proj-grokmcp", name: "GrokMcp", root: "/tmp/dash", canonical_path: "/tmp/dash", imported: true, skill_status: "outdated", skill_version: "0", created_at: nowIso(), updated_at: nowIso(), last_used_at: nowIso(), active_count: 0, needs_input_count: 0 },
+];
+
+function findProject(id: string): Project {
+  const p = projects.find((x) => x.project_id === id);
+  if (!p) throw new Error("project not found");
+  return p;
+}
+
+const builtinPrompt = `你是 Codex，正在通过 Grok Supervisor 与 Grok 协作。
+
+协作约定：
+- 重活交给 Grok 执行；你审计划和验收，不要自己做重实施。
+- 用 grok_wait 等待边界状态，不要看过程流。
+- 断连后继续原来的 Grok session，不要创建替换会话。
+- 模型由用户配置，不要修改模型设置。
+
+项目：{name}
+路径：{root}
+
+本次让 Grok 完成：
+{goal}
+
+约束：
+{constraints}
+
+验收：
+{acceptance}
+`;
 
 let settings: Settings = {
   grok_binary_path: "",
@@ -123,7 +164,7 @@ export const mockClient: Client = {
       else if (q.state === "working") list = list.filter((j) => ["planning", "executing", "starting", "recovering"].includes(j.state));
       else list = list.filter((j) => j.state === q.state);
     }
-    if (q.project && q.project !== "all") list = list.filter((j) => j.project === q.project);
+    if (q.project && q.project !== "all") list = list.filter((j) => j.project_id === q.project || j.project === q.project);
     if (q.view && q.view !== "all") list = list.filter((j) => j.view_mode === q.view);
     if (query) {
       list = list.filter((j) => [j.title, j.project, j.last_action, j.grok_session_id].filter(Boolean).some((v) => String(v).toLowerCase().includes(query)));
@@ -135,9 +176,74 @@ export const mockClient: Client = {
     const hasMore = Math.max(0, start) + slice.length < list.length;
     return { jobs: slice.map((j) => ({ ...j })), next_cursor: hasMore ? slice.at(-1)?.job_id : "", has_more: hasMore };
   },
-  async listProjects() {
-    return [...new Set(jobs.map((j) => j.project).filter(Boolean))].sort();
+  async importProject(path, installSkill = true) {
+    const name = path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+    let p = projects.find((x) => x.canonical_path === path);
+    if (!p) {
+      p = { project_id: `proj-${projects.length + 1}`, name, root: path, canonical_path: path, imported: true, skill_status: installSkill ? "installed" : "missing", skill_version: installSkill ? "1" : undefined, created_at: nowIso(), updated_at: nowIso(), last_used_at: nowIso(), active_count: 0, needs_input_count: 0 };
+      projects.push(p);
+    } else {
+      p.imported = true;
+      if (installSkill && p.skill_status !== "conflict") {
+        p.skill_status = "installed";
+        p.skill_version = "1";
+      }
+    }
+    emit();
+    return { ...p };
   },
+  async listProjects() {
+    return sortProjects(projects.map((p) => ({ ...p })));
+  },
+  async getProject(id) {
+    return { ...findProject(id) };
+  },
+  async removeProject(id) {
+    const p = findProject(id);
+    p.imported = false;
+    emit();
+    return { ...p };
+  },
+  async skillStatus(id) {
+    return { ...findProject(id) };
+  },
+  async skillInstall(id) {
+    const p = findProject(id);
+    if (p.skill_status === "conflict") throw new Error("skill file exists and is not managed by Grok Supervisor");
+    p.skill_status = "installed";
+    p.skill_version = "1";
+    emit();
+    return { ...p };
+  },
+  async skillUpdate(id) {
+    const p = findProject(id);
+    if (p.skill_status === "conflict") throw new Error("skill file exists and is not managed by Grok Supervisor");
+    p.skill_status = "installed";
+    p.skill_version = "1";
+    emit();
+    return { ...p };
+  },
+  async skillRemove(id) {
+    const p = findProject(id);
+    if (p.skill_status === "conflict") throw new Error("skill file is not managed by Grok Supervisor");
+    p.skill_status = "missing";
+    p.skill_version = undefined;
+    emit();
+    return { ...p };
+  },
+  async generatePrompt(id, goal, constraints, acceptance): Promise<PromptResult> {
+    const p = findProject(id);
+    const tmpl = p.prompt_template || builtinPrompt;
+    const text = tmpl.replaceAll("{name}", p.name).replaceAll("{root}", p.root).replaceAll("{goal}", goal || "（填写本次要完成的工作）").replaceAll("{constraints}", constraints || "（填写约束；没有则写无）").replaceAll("{acceptance}", acceptance || "（填写验收标准）");
+    return { project_id: id, text, builtin: builtinPrompt, goal, constraints, acceptance };
+  },
+  async savePrompt(id, template) {
+    const p = findProject(id);
+    p.prompt_template = template;
+    emit();
+    return { ...p };
+  },
+  async openProjectDir() {},
   async archiveJob(jobId) {
     const job = find(jobId);
     if (["starting", "planning", "executing", "recovering", "plan_ready", "needs_input", "disconnected"].includes(job.state)) {

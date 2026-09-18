@@ -35,7 +35,35 @@ func (stub) ListJobs(context.Context) ([]protocol.Job, error)     { return nil, 
 func (stub) ListJobsPage(context.Context, protocol.ListJobsQuery) (protocol.JobPage, error) {
 	return protocol.JobPage{}, nil
 }
-func (stub) ListProjects(context.Context, bool) ([]string, error) { return nil, nil }
+func (stub) ImportProject(context.Context, string, bool) (protocol.Project, error) {
+	return protocol.Project{}, nil
+}
+func (stub) ListProjects(context.Context) ([]protocol.Project, error) { return nil, nil }
+func (stub) GetProject(context.Context, string) (protocol.Project, error) {
+	return protocol.Project{}, nil
+}
+func (stub) RemoveProject(context.Context, string) (protocol.Project, error) {
+	return protocol.Project{}, nil
+}
+func (stub) SkillStatus(context.Context, string) (protocol.Project, error) {
+	return protocol.Project{}, nil
+}
+func (stub) SkillInstall(context.Context, string) (protocol.Project, error) {
+	return protocol.Project{}, nil
+}
+func (stub) SkillUpdate(context.Context, string) (protocol.Project, error) {
+	return protocol.Project{}, nil
+}
+func (stub) SkillRemove(context.Context, string) (protocol.Project, error) {
+	return protocol.Project{}, nil
+}
+func (stub) GeneratePrompt(context.Context, protocol.GeneratePromptRequest) (protocol.PromptResult, error) {
+	return protocol.PromptResult{}, nil
+}
+func (stub) SavePrompt(context.Context, protocol.SavePromptRequest) (protocol.Project, error) {
+	return protocol.Project{}, nil
+}
+func (stub) OpenProjectDir(context.Context, string) error { return nil }
 func (stub) ArchiveJob(context.Context, string) (protocol.Job, error) {
 	return protocol.Job{}, nil
 }
@@ -201,18 +229,28 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string][]string{
-		"grok_dispatch":       {"tasks"},
-		"grok_wait":           {"job_ids"},
-		"grok_plan_decide":    {"job_id", "decide"},
-		"grok_followup":       {"job_id", "prompt"},
-		"grok_cancel_turn":    {"job_id"},
-		"grok_set_view":       {"job_id", "view"},
-		"grok_status":         nil,
-		"grok_open_terminal":  nil,
-		"grok_debug_set":      {"enabled"},
-		"grok_debug_snapshot": {"job_id"},
-		"grok_debug_wait":     {"job_id", "cursor"},
-		"grok_debug_export":   {"job_id"},
+		"grok_dispatch":        {"tasks"},
+		"grok_wait":            {"job_ids"},
+		"grok_plan_decide":     {"job_id", "decide"},
+		"grok_followup":        {"job_id", "prompt"},
+		"grok_cancel_turn":     {"job_id"},
+		"grok_set_view":        {"job_id", "view"},
+		"grok_status":          nil,
+		"grok_open_terminal":   nil,
+		"grok_debug_set":       {"enabled"},
+		"grok_debug_snapshot":  {"job_id"},
+		"grok_debug_wait":      {"job_id", "cursor"},
+		"grok_debug_export":    {"job_id"},
+		"grok_project_import":  {"path"},
+		"grok_project_list":    nil,
+		"grok_project_get":     {"project_id"},
+		"grok_project_remove":  {"project_id"},
+		"grok_skill_status":    {"project_id"},
+		"grok_skill_install":   {"project_id"},
+		"grok_skill_update":    {"project_id"},
+		"grok_skill_remove":    {"project_id"},
+		"grok_prompt_generate": {"project_id"},
+		"grok_prompt_save":     {"project_id", "template"},
 	}
 	got := map[string][]string{}
 	for _, tool := range listed.Tools {

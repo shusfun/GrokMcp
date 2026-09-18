@@ -9,16 +9,23 @@ import (
 
 type Generator interface {
 	JobID() string
+	ProjectID() string
 }
 
 type UUID struct{}
 
-func (UUID) JobID() string { return uuid.NewString() }
+func (UUID) JobID() string     { return uuid.NewString() }
+func (UUID) ProjectID() string { return uuid.NewString() }
 
 type Seq struct {
 	n atomic.Int64
+	p atomic.Int64
 }
 
 func (s *Seq) JobID() string {
 	return fmt.Sprintf("job-%d", s.n.Add(1))
+}
+
+func (s *Seq) ProjectID() string {
+	return fmt.Sprintf("proj-%d", s.p.Add(1))
 }

@@ -120,8 +120,40 @@ func (c *Client) ListJobs(ctx context.Context) ([]protocol.Job, error) {
 func (c *Client) ListJobsPage(ctx context.Context, q protocol.ListJobsQuery) (protocol.JobPage, error) {
 	return decode[protocol.JobPage](c.call(ctx, "listJobsPage", q))
 }
-func (c *Client) ListProjects(ctx context.Context, includeArchived bool) ([]string, error) {
-	return decode[[]string](c.call(ctx, "listProjects", map[string]bool{"include_archived": includeArchived}))
+func (c *Client) ImportProject(ctx context.Context, path string, installSkill bool) (protocol.Project, error) {
+	flag := installSkill
+	return decode[protocol.Project](c.call(ctx, "importProject", protocol.ImportProjectRequest{Path: path, InstallSkill: &flag}))
+}
+func (c *Client) ListProjects(ctx context.Context) ([]protocol.Project, error) {
+	return decode[[]protocol.Project](c.call(ctx, "listProjects", struct{}{}))
+}
+func (c *Client) GetProject(ctx context.Context, projectID string) (protocol.Project, error) {
+	return decode[protocol.Project](c.call(ctx, "getProject", protocol.ProjectIDRequest{ProjectID: projectID}))
+}
+func (c *Client) RemoveProject(ctx context.Context, projectID string) (protocol.Project, error) {
+	return decode[protocol.Project](c.call(ctx, "removeProject", protocol.ProjectIDRequest{ProjectID: projectID}))
+}
+func (c *Client) SkillStatus(ctx context.Context, projectID string) (protocol.Project, error) {
+	return decode[protocol.Project](c.call(ctx, "skillStatus", protocol.ProjectIDRequest{ProjectID: projectID}))
+}
+func (c *Client) SkillInstall(ctx context.Context, projectID string) (protocol.Project, error) {
+	return decode[protocol.Project](c.call(ctx, "skillInstall", protocol.ProjectIDRequest{ProjectID: projectID}))
+}
+func (c *Client) SkillUpdate(ctx context.Context, projectID string) (protocol.Project, error) {
+	return decode[protocol.Project](c.call(ctx, "skillUpdate", protocol.ProjectIDRequest{ProjectID: projectID}))
+}
+func (c *Client) SkillRemove(ctx context.Context, projectID string) (protocol.Project, error) {
+	return decode[protocol.Project](c.call(ctx, "skillRemove", protocol.ProjectIDRequest{ProjectID: projectID}))
+}
+func (c *Client) GeneratePrompt(ctx context.Context, req protocol.GeneratePromptRequest) (protocol.PromptResult, error) {
+	return decode[protocol.PromptResult](c.call(ctx, "generatePrompt", req))
+}
+func (c *Client) SavePrompt(ctx context.Context, req protocol.SavePromptRequest) (protocol.Project, error) {
+	return decode[protocol.Project](c.call(ctx, "savePrompt", req))
+}
+func (c *Client) OpenProjectDir(ctx context.Context, projectID string) error {
+	_, err := c.call(ctx, "openProjectDir", protocol.ProjectIDRequest{ProjectID: projectID})
+	return err
 }
 func (c *Client) ArchiveJob(ctx context.Context, jobID string) (protocol.Job, error) {
 	return decode[protocol.Job](c.call(ctx, "archiveJob", map[string]string{"job_id": jobID}))

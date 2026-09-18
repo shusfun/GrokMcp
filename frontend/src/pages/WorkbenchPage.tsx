@@ -10,12 +10,11 @@ import { cn } from "../lib/cn";
 
 const PAGE_SIZE = 40;
 
-export function WorkbenchPage() {
+export function WorkbenchPage({ projectId, listOnly }: { projectId?: string; listOnly?: boolean }) {
   const jobId = useMatch("/sessions/:jobId")?.params.jobId;
   const navigate = useNavigate();
   const client = getClient();
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [projects, setProjects] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [hasMore, setHasMore] = useState(false);
   const [filters, setFilters] = useState<Filters>({ query: "", state: "all", project: "all", view: "all", include_archived: false });
@@ -40,7 +39,7 @@ export function WorkbenchPage() {
       include_archived: filters.include_archived,
       query: filters.query,
       state: filters.state,
-      project: filters.project,
+      project: projectId || filters.project,
       view: filters.view,
     }).then((page) => {
       if (id !== seq.current) return;
@@ -59,19 +58,17 @@ export function WorkbenchPage() {
     }).finally(() => {
       if (id === seq.current) loading.current = false;
     });
-  }, [client, filters]);
+  }, [client, filters, projectId]);
 
   useEffect(() => {
     loadPage(true);
   }, [loadPage]);
 
   useEffect(() => {
-    void client.listProjects(filters.include_archived).then(setProjects).catch(() => undefined);
     return client.subscribe(() => {
       loadPage(true);
-      void client.listProjects(filters.include_archived).then(setProjects).catch(() => undefined);
     });
-  }, [client, filters.include_archived, loadPage]);
+  }, [client, loadPage]);
 
   useEffect(() => {
     const el = sentinel.current;
@@ -85,7 +82,7 @@ export function WorkbenchPage() {
     return () => obs.disconnect();
   }, [hasMore, loadPage, jobs.length]);
 
-  const selected = Boolean(jobId);
+  const selected = Boolean(jobId) && !listOnly;
 
   return (
     <div className="flex h-full min-h-0">
@@ -95,14 +92,14 @@ export function WorkbenchPage() {
           selected ? "w-[min(42%,420px)] shrink-0 border-r max-[899px]:hidden" : "flex-1",
         )}
       >
-        <JobFilters jobs={jobs} projects={projects} value={filters} onChange={setFilters} />
+        <JobFilters jobs={jobs} hideProject={Boolean(projectId)} value={filters} onChange={setFilters} />
         <div className="min-h-0 flex-1 overflow-auto">
           {error ? <ErrorState message={error} /> : null}
           {!error && jobs.length === 0 ? <EmptyState title="没有任务" detail={filters.include_archived ? "没有归档任务。" : "从 Codex 调用 grok_dispatch 创建。"} /> : null}
           {jobs.length > 0 ? (
             <JobList
               jobs={jobs}
-              selectedId={jobId}
+              selectedId={listOnly ? undefined : jobId}
               onSelect={(id) => navigate(`/sessions/${id}`)}
               onShowTui={(job) => void client.setView(job.job_id, "headed")}
             />
@@ -110,13 +107,15 @@ export function WorkbenchPage() {
           <div ref={sentinel} className="h-4" />
         </div>
       </section>
-      <section className={cn("min-h-0 min-w-0 flex-1 bg-[var(--surface)]", !selected && "max-[899px]:hidden")}>
-        {jobId ? (
-          <SessionDetail jobId={jobId} />
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">选择一个任务</div>
-        )}
-      </section>
+      {listOnly ? null : (
+        <section className={cn("min-h-0 min-w-0 flex-1 bg-[var(--surface)]", !selected && "max-[899px]:hidden")}>
+          {jobId ? (
+            <SessionDetail jobId={jobId} />
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">选择一个任务</div>
+          )}
+        </section>
+      )}
       <Outlet />
     </div>
   );

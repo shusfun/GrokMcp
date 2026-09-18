@@ -1,4 +1,5 @@
 import type { Job, JobPage, ListJobsQuery } from "../lib/jobs";
+import type { Project, PromptResult } from "../lib/projects";
 
 export type Settings = {
   grok_binary_path: string;
@@ -83,7 +84,17 @@ export type UpdateRelease = {
 export type Client = {
   listJobs(): Promise<Job[]>;
   listJobsPage(q: ListJobsQuery): Promise<JobPage>;
-  listProjects(includeArchived?: boolean): Promise<string[]>;
+  importProject(path: string, installSkill?: boolean): Promise<Project>;
+  listProjects(): Promise<Project[]>;
+  getProject(projectId: string): Promise<Project>;
+  removeProject(projectId: string): Promise<Project>;
+  skillStatus(projectId: string): Promise<Project>;
+  skillInstall(projectId: string): Promise<Project>;
+  skillUpdate(projectId: string): Promise<Project>;
+  skillRemove(projectId: string): Promise<Project>;
+  generatePrompt(projectId: string, goal?: string, constraints?: string, acceptance?: string): Promise<PromptResult>;
+  savePrompt(projectId: string, template: string): Promise<Project>;
+  openProjectDir(projectId: string): Promise<void>;
   archiveJob(jobId: string): Promise<Job>;
   unarchiveJob(jobId: string): Promise<Job>;
   deleteJob(jobId: string): Promise<void>;

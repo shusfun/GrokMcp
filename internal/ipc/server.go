@@ -158,13 +158,80 @@ func (s *Server) dispatch(ctx context.Context, req Request) (json.RawMessage, er
 		}
 		out, err := s.svc.ListJobsPage(ctx, in)
 		return marshal(out, err)
-	case "listProjects":
-		var in struct {
-			IncludeArchived bool `json:"include_archived"`
+	case "importProject":
+		var in protocol.ImportProjectRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
 		}
-		_ = json.Unmarshal(req.Params, &in)
-		out, err := s.svc.ListProjects(ctx, in.IncludeArchived)
+		install := true
+		if in.InstallSkill != nil {
+			install = *in.InstallSkill
+		}
+		out, err := s.svc.ImportProject(ctx, in.Path, install)
 		return marshal(out, err)
+	case "listProjects":
+		out, err := s.svc.ListProjects(ctx)
+		return marshal(out, err)
+	case "getProject":
+		var in protocol.ProjectIDRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.GetProject(ctx, in.ProjectID)
+		return marshal(out, err)
+	case "removeProject":
+		var in protocol.ProjectIDRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.RemoveProject(ctx, in.ProjectID)
+		return marshal(out, err)
+	case "skillStatus":
+		var in protocol.ProjectIDRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.SkillStatus(ctx, in.ProjectID)
+		return marshal(out, err)
+	case "skillInstall":
+		var in protocol.ProjectIDRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.SkillInstall(ctx, in.ProjectID)
+		return marshal(out, err)
+	case "skillUpdate":
+		var in protocol.ProjectIDRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.SkillUpdate(ctx, in.ProjectID)
+		return marshal(out, err)
+	case "skillRemove":
+		var in protocol.ProjectIDRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.SkillRemove(ctx, in.ProjectID)
+		return marshal(out, err)
+	case "generatePrompt":
+		var in protocol.GeneratePromptRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.GeneratePrompt(ctx, in)
+		return marshal(out, err)
+	case "savePrompt":
+		var in protocol.SavePromptRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.SavePrompt(ctx, in)
+		return marshal(out, err)
+	case "openProjectDir":
+		var in protocol.ProjectIDRequest
+		_ = json.Unmarshal(req.Params, &in)
+		return marshal(struct{}{}, s.svc.OpenProjectDir(ctx, in.ProjectID))
 	case "archiveJob":
 		var in struct {
 			JobID string `json:"job_id"`

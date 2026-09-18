@@ -49,11 +49,13 @@ function Chip({
 export function JobFilters({
   jobs,
   projects = [],
+  hideProject = false,
   value,
   onChange,
 }: {
   jobs: Job[];
   projects?: string[];
+  hideProject?: boolean;
   value: Filters;
   onChange: (v: Filters) => void;
 }) {
@@ -69,13 +71,15 @@ export function JobFilters({
       </div>
       <div className="flex gap-2">
         <Select aria-label="状态" className="min-w-0 flex-1" value={value.state} options={STATES} onChange={(state) => onChange({ ...value, state })} />
-        <Select
-          aria-label="项目"
-          className="min-w-0 flex-1"
-          value={value.project}
-          options={[{ value: "all", label: "项目：全部" }, ...projects.map((p) => ({ value: p, label: p }))]}
-          onChange={(project) => onChange({ ...value, project })}
-        />
+        {hideProject ? null : (
+          <Select
+            aria-label="项目"
+            className="min-w-0 flex-1"
+            value={value.project}
+            options={[{ value: "all", label: "项目：全部" }, ...projects.map((p) => ({ value: p, label: p }))]}
+            onChange={(project) => onChange({ ...value, project })}
+          />
+        )}
         <Select aria-label="形态" className="min-w-0 flex-1" value={value.view} options={VIEWS} onChange={(view) => onChange({ ...value, view })} />
       </div>
     </div>

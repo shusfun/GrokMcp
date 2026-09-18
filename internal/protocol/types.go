@@ -67,6 +67,7 @@ type Job struct {
 	CodexThreadID    string     `json:"codex_thread_id,omitempty"`
 	GrokSessionID    string     `json:"grok_session_id,omitempty"`
 	Cwd              string     `json:"cwd"`
+	ProjectID        string     `json:"project_id,omitempty"`
 	Project          string     `json:"project"`
 	Title            string     `json:"title"`
 	State            JobState   `json:"state"`
@@ -114,13 +115,15 @@ type DispatchTask struct {
 	Title         string `json:"title,omitempty"`
 	Prompt        string `json:"prompt"`
 	Cwd           string `json:"cwd,omitempty"`
+	ProjectID     string `json:"project_id,omitempty"`
 	Worktree      bool   `json:"worktree,omitempty"`
 	CodexThreadID string `json:"codex_thread_id,omitempty"`
 }
 
 type DispatchRequest struct {
-	Tasks []DispatchTask `json:"tasks"`
-	Cwd   string         `json:"cwd,omitempty"`
+	Tasks     []DispatchTask `json:"tasks"`
+	Cwd       string         `json:"cwd,omitempty"`
+	ProjectID string         `json:"project_id,omitempty"`
 }
 
 type DispatchResult struct {
@@ -252,13 +255,70 @@ type Event struct {
 	JobID string `json:"job_id,omitempty"`
 }
 
+type SkillStatus string
+
+const (
+	SkillMissing   SkillStatus = "missing"
+	SkillInstalled SkillStatus = "installed"
+	SkillOutdated  SkillStatus = "outdated"
+	SkillConflict  SkillStatus = "conflict"
+)
+
+type Project struct {
+	ProjectID       string      `json:"project_id"`
+	Name            string      `json:"name"`
+	Root            string      `json:"root"`
+	CanonicalPath   string      `json:"canonical_path"`
+	GitRoot         string      `json:"git_root,omitempty"`
+	Imported        bool        `json:"imported"`
+	SkillStatus     SkillStatus `json:"skill_status"`
+	SkillVersion    string      `json:"skill_version,omitempty"`
+	SkillMessage    string      `json:"skill_message,omitempty"`
+	PromptTemplate  string      `json:"prompt_template,omitempty"`
+	CreatedAt       time.Time   `json:"created_at"`
+	UpdatedAt       time.Time   `json:"updated_at"`
+	LastUsedAt      time.Time   `json:"last_used_at"`
+	ActiveCount     int         `json:"active_count"`
+	NeedsInputCount int         `json:"needs_input_count"`
+}
+
+type ImportProjectRequest struct {
+	Path         string `json:"path"`
+	InstallSkill *bool  `json:"install_skill,omitempty" jsonschema:"optional; default true"`
+}
+
+type ProjectIDRequest struct {
+	ProjectID string `json:"project_id"`
+}
+
+type GeneratePromptRequest struct {
+	ProjectID   string `json:"project_id"`
+	Goal        string `json:"goal,omitempty"`
+	Constraints string `json:"constraints,omitempty"`
+	Acceptance  string `json:"acceptance,omitempty"`
+}
+
+type SavePromptRequest struct {
+	ProjectID string `json:"project_id"`
+	Template  string `json:"template"`
+}
+
+type PromptResult struct {
+	ProjectID   string `json:"project_id"`
+	Text        string `json:"text"`
+	Builtin     string `json:"builtin"`
+	Goal        string `json:"goal,omitempty"`
+	Constraints string `json:"constraints,omitempty"`
+	Acceptance  string `json:"acceptance,omitempty"`
+}
+
 type ListJobsQuery struct {
 	Cursor          string `json:"cursor,omitempty"`
 	Limit           int    `json:"limit,omitempty"`
 	IncludeArchived bool   `json:"include_archived,omitempty"`
 	Query           string `json:"query,omitempty"`
 	State           string `json:"state,omitempty"`
-	Project         string `json:"project,omitempty"`
+	Project         string `json:"project,omitempty" jsonschema:"optional project_id"`
 	View            string `json:"view,omitempty"`
 }
 

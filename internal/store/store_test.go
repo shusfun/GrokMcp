@@ -162,7 +162,14 @@ func TestListJobsPageHidesArchivedAndFilters(t *testing.T) {
 	if err != nil || len(arch) != 1 || arch[0].Job.JobID != "old" {
 		t.Fatalf("archived %+v %v", arch, err)
 	}
-	q, _, _, err := s.ListJobsPage(protocol.ListJobsQuery{Limit: 10, Query: "登录", Project: "auth"})
+	if err := s.backfillProjects(); err != nil {
+		t.Fatal(err)
+	}
+	liveRec, err := s.GetJob("live")
+	if err != nil || liveRec.Job.ProjectID == "" {
+		t.Fatalf("backfill project_id %+v %v", liveRec.Job, err)
+	}
+	q, _, _, err := s.ListJobsPage(protocol.ListJobsQuery{Limit: 10, Query: "登录", Project: liveRec.Job.ProjectID})
 	if err != nil || len(q) != 1 || q[0].Job.JobID != "live" {
 		t.Fatalf("query %+v %v", q, err)
 	}
@@ -196,5 +203,80 @@ func TestDeleteJobRemovesEventsKeepsOthers(t *testing.T) {
 	}
 	if _, err := s.GetJob("j2"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMigrateBackfillAndCanonicalDedup(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(10, 0).UTC()
+	putJob(t, s, protocol.Job{JobID: "a", Cwd: "/tmp/same", Title: "a", State: protocol.StateCompleted, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, CreatedAt: now, UpdatedAt: now})
+	putJob(t, s, protocol.Job{JobID: "b", Cwd: "/tmp/same/", Title: "b", State: protocol.StateFailed, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, CreatedAt: now, UpdatedAt: now.Add(time.Second)})
+	if err := s.backfillProjects(); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.GetJob("a")
+	b, _ := s.GetJob("b")
+	if a.Job.ProjectID == "" || a.Job.ProjectID != b.Job.ProjectID {
+		t.Fatalf("project ids %q %q", a.Job.ProjectID, b.Job.ProjectID)
+	}
+	if a.Job.Project == "" {
+		t.Fatal("missing project name")
+	}
+	p, err := s.GetProject(a.Job.ProjectID)
+	if err != nil || p.Imported {
+		t.Fatalf("%+v %v", p, err)
+	}
+}
+
+func TestDemoteProjectKeepsRowAndJobs(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(20, 0).UTC()
+	p := protocol.Project{ProjectID: "p1", Name: "keep", Root: "/tmp/keep", CanonicalPath: "/tmp/keep", Imported: true, CreatedAt: now, UpdatedAt: now, LastUsedAt: now}
+	if err := s.PutProject(p); err != nil {
+		t.Fatal(err)
+	}
+	putJob(t, s, protocol.Job{JobID: "j1", ProjectID: "p1", Cwd: "/tmp/keep", Title: "t", State: protocol.StateCompleted, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, CreatedAt: now, UpdatedAt: now})
+	got, err := s.DemoteProject("p1", now.Add(time.Minute))
+	if err != nil || got.Imported || got.ProjectID != "p1" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	j, err := s.GetJob("j1")
+	if err != nil || j.Job.ProjectID != "p1" {
+		t.Fatalf("%+v %v", j.Job, err)
+	}
+	list, err := s.ListProjects()
+	if err != nil || len(list) != 1 || list[0].ProjectID != "p1" {
+		t.Fatalf("%+v %v", list, err)
+	}
+}
+
+func TestListProjectsActiveFirst(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sec := func(n int64) time.Time { return time.Unix(n, 0).UTC() }
+	if err := s.PutProject(protocol.Project{ProjectID: "old", Name: "old", Root: "/tmp/old", CanonicalPath: "/tmp/old", LastUsedAt: sec(500), CreatedAt: sec(1), UpdatedAt: sec(1)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutProject(protocol.Project{ProjectID: "live", Name: "live", Root: "/tmp/live", CanonicalPath: "/tmp/live", LastUsedAt: sec(10), CreatedAt: sec(1), UpdatedAt: sec(1)}); err != nil {
+		t.Fatal(err)
+	}
+	putJob(t, s, protocol.Job{JobID: "j", ProjectID: "live", Cwd: "/tmp/live", Title: "t", State: protocol.StateExecuting, ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor, CreatedAt: sec(1), UpdatedAt: sec(1)})
+	list, err := s.ListProjects()
+	if err != nil || len(list) != 2 {
+		t.Fatalf("%+v %v", list, err)
+	}
+	if list[0].ProjectID != "live" || list[0].ActiveCount != 1 {
+		t.Fatalf("order %+v", list)
 	}
 }

@@ -28,8 +28,50 @@ func (s *Service) ListJobsPage(ctx context.Context, cursor string, limit int, in
 	})
 }
 
-func (s *Service) ListProjects(ctx context.Context, includeArchived bool) ([]string, error) {
-	return s.Backend.ListProjects(ctx, includeArchived)
+func (s *Service) ImportProject(ctx context.Context, path string, installSkill bool) (protocol.Project, error) {
+	return s.Backend.ImportProject(ctx, path, installSkill)
+}
+
+func (s *Service) ListProjects(ctx context.Context) ([]protocol.Project, error) {
+	return s.Backend.ListProjects(ctx)
+}
+
+func (s *Service) GetProject(ctx context.Context, projectID string) (protocol.Project, error) {
+	return s.Backend.GetProject(ctx, projectID)
+}
+
+func (s *Service) RemoveProject(ctx context.Context, projectID string) (protocol.Project, error) {
+	return s.Backend.RemoveProject(ctx, projectID)
+}
+
+func (s *Service) SkillStatus(ctx context.Context, projectID string) (protocol.Project, error) {
+	return s.Backend.SkillStatus(ctx, projectID)
+}
+
+func (s *Service) SkillInstall(ctx context.Context, projectID string) (protocol.Project, error) {
+	return s.Backend.SkillInstall(ctx, projectID)
+}
+
+func (s *Service) SkillUpdate(ctx context.Context, projectID string) (protocol.Project, error) {
+	return s.Backend.SkillUpdate(ctx, projectID)
+}
+
+func (s *Service) SkillRemove(ctx context.Context, projectID string) (protocol.Project, error) {
+	return s.Backend.SkillRemove(ctx, projectID)
+}
+
+func (s *Service) GeneratePrompt(ctx context.Context, projectID, goal, constraints, acceptance string) (protocol.PromptResult, error) {
+	return s.Backend.GeneratePrompt(ctx, protocol.GeneratePromptRequest{
+		ProjectID: projectID, Goal: goal, Constraints: constraints, Acceptance: acceptance,
+	})
+}
+
+func (s *Service) SavePrompt(ctx context.Context, projectID, template string) (protocol.Project, error) {
+	return s.Backend.SavePrompt(ctx, protocol.SavePromptRequest{ProjectID: projectID, Template: template})
+}
+
+func (s *Service) OpenProjectDir(ctx context.Context, projectID string) error {
+	return s.Backend.OpenProjectDir(ctx, projectID)
 }
 
 func (s *Service) ArchiveJob(ctx context.Context, jobID string) (protocol.Job, error) {

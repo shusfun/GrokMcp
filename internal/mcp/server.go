@@ -94,4 +94,58 @@ func addTools(server *mcp.Server, backend core.Backend) {
 			out, err := backend.DebugExport(ctx, in.JobID)
 			return nil, out, err
 		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_project_import", Description: "登记项目。默认安装工具说明 Skill；冲突不覆盖用户文件，项目仍成功。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.ImportProjectRequest) (*mcp.CallToolResult, protocol.Project, error) {
+			install := true
+			if in.InstallSkill != nil {
+				install = *in.InstallSkill
+			}
+			out, err := backend.ImportProject(ctx, in.Path, install)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_project_list", Description: "列出已导入和已发现项目。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, []protocol.Project, error) {
+			out, err := backend.ListProjects(ctx)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_project_get", Description: "读取项目详情与 Skill 状态。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.ProjectIDRequest) (*mcp.CallToolResult, protocol.Project, error) {
+			out, err := backend.GetProject(ctx, in.ProjectID)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_project_remove", Description: "将导入项目降级为已发现，不删除源码、job、session 或 Skill。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.ProjectIDRequest) (*mcp.CallToolResult, protocol.Project, error) {
+			out, err := backend.RemoveProject(ctx, in.ProjectID)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_skill_status", Description: "探测项目工具说明 Skill 状态。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.ProjectIDRequest) (*mcp.CallToolResult, protocol.Project, error) {
+			out, err := backend.SkillStatus(ctx, in.ProjectID)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_skill_install", Description: "安装项目工具说明 Skill；用户文件冲突时不覆盖。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.ProjectIDRequest) (*mcp.CallToolResult, protocol.Project, error) {
+			out, err := backend.SkillInstall(ctx, in.ProjectID)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_skill_update", Description: "更新自身管理的项目 Skill。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.ProjectIDRequest) (*mcp.CallToolResult, protocol.Project, error) {
+			out, err := backend.SkillUpdate(ctx, in.ProjectID)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_skill_remove", Description: "只删除自身管理的 Skill 文件。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.ProjectIDRequest) (*mcp.CallToolResult, protocol.Project, error) {
+			out, err := backend.SkillRemove(ctx, in.ProjectID)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_prompt_generate", Description: "生成可复制的 Codex 提示词，不发送、不注入会话。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.GeneratePromptRequest) (*mcp.CallToolResult, protocol.PromptResult, error) {
+			out, err := backend.GeneratePrompt(ctx, in)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_prompt_save", Description: "保存项目默认 Codex 提示词。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.SavePromptRequest) (*mcp.CallToolResult, protocol.Project, error) {
+			out, err := backend.SavePrompt(ctx, in)
+			return nil, out, err
+		})
 }

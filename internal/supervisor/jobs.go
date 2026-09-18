@@ -29,10 +29,6 @@ func (s *Service) ListJobsPage(_ context.Context, q protocol.ListJobsQuery) (pro
 	return protocol.JobPage{Jobs: out, NextCursor: next, HasMore: more}, nil
 }
 
-func (s *Service) ListProjects(_ context.Context, includeArchived bool) ([]string, error) {
-	return s.store.ListProjects(includeArchived)
-}
-
 func (s *Service) ArchiveJob(_ context.Context, jobID string) (protocol.Job, error) {
 	job, err := s.load(jobID)
 	if err != nil {
