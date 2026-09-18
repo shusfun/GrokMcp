@@ -1,0 +1,5 @@
+packages:
+  - frontend
+minimumReleaseAgeExclude:
+  - lucide-react@1.47.0
+  - '@wailsio/runtime@3.0.0-beta.23'

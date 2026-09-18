@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grok Supervisor 设计文档</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #17211b;
+      background: #f4f7f5;
+      line-height: 1.55;
+      letter-spacing: 0;
+      --ink: #17211b;
+      --muted: #607068;
+      --line: #ccd8d1;
+      --paper: #ffffff;
+      --green: #176b48;
+      --green-soft: #e7f2eb;
+      --blue: #235f9a;
+      --blue-soft: #e8f0f8;
+      --amber: #9a6200;
+      --amber-soft: #fff4d9;
+      --red: #a33b45;
+      --red-soft: #fae9eb;
+      --code: #202b25;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; }
+    a { color: inherit; }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .rail {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 26px 20px;
+      border-right: 1px solid var(--line);
+      background: #edf3ef;
+      overflow: auto;
+    }
+
+    .rail-brand {
+      padding-bottom: 18px;
+      margin-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .rail-brand strong { display: block; font-size: 16px; }
+    .rail-brand span { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+    .rail nav { display: grid; gap: 3px; }
+    .rail nav a {
+      padding: 7px 8px;
+      text-decoration: none;
+      color: #3f5147;
+      font-size: 13px;
+      border-left: 2px solid transparent;
+    }
+    .rail nav a:hover { color: var(--green); border-left-color: var(--green); background: #fff; }
+
+    main { min-width: 0; }
+    .hero {
+      padding: 54px clamp(24px, 6vw, 82px) 46px;
+      color: #f7fbf8;
+      background: #1f3f31;
+      border-bottom: 5px solid #58a17a;
+    }
+
+    .eyebrow { color: #a9d8bb; font-size: 12px; font-weight: 750; text-transform: uppercase; }
+    h1 { margin: 9px 0 12px; max-width: 900px; font-size: 38px; line-height: 1.16; }
+    .hero p { margin: 0; max-width: 820px; color: #d4e5db; font-size: 16px; }
+
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+    .hero-meta span {
+      padding: 5px 9px;
+      border: 1px solid #668a75;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #ecf5ef;
+    }
+
+    .content { max-width: 1240px; padding: 0 clamp(24px, 6vw, 82px) 80px; }
+    section { padding: 42px 0; border-bottom: 1px solid var(--line); }
+    section:last-child { border-bottom: 0; }
+
+    .section-heading { display: flex; gap: 14px; align-items: baseline; margin-bottom: 22px; }
+    .section-no { color: var(--green); font-size: 12px; font-weight: 800; }
+    h2 { margin: 0; font-size: 23px; line-height: 1.25; }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+    p { margin: 7px 0; }
+    .muted { color: var(--muted); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 28px;
+      align-items: stretch;
+    }
+
+    .flow-item {
+      position: relative;
+      min-height: 112px;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-top: 3px solid var(--green);
+      border-radius: 6px;
+      background: var(--paper);
+    }
+    .flow-item:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -23px;
+      top: 40%;
+      color: var(--green);
+      font-size: 24px;
+      font-weight: 700;
+    }
+    .flow-item strong { display: block; font-size: 14px; }
+    .flow-item small { display: block; margin-top: 7px; color: var(--muted); font-size: 12px; }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr) 190px;
+      gap: 18px;
+      align-items: center;
+    }
+    .actor, .system {
+      padding: 18px;
+      border-radius: 6px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+    }
+    .actor { border-left: 4px solid var(--blue); }
+    .system { border-left: 4px solid var(--green); }
+    .stack { display: grid; gap: 8px; }
+    .stack .system { min-height: 62px; }
+    .connector { text-align: center; color: var(--muted); font-size: 12px; }
+
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .mode {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--paper);
+    }
+    .mode.headless { border-top: 4px solid var(--blue); }
+    .mode.headed { border-top: 4px solid var(--green); }
+    .mode ul { padding-left: 18px; margin: 12px 0 0; color: #45564d; font-size: 13px; }
+
+    .switch-track {
+      display: grid;
+      grid-template-columns: 1fr 80px 1fr;
+      gap: 12px;
+      align-items: center;
+      margin-top: 18px;
+    }
+    .switch-track .label { padding: 14px; text-align: center; border: 1px solid var(--line); background: white; border-radius: 5px; }
+    .switch-track .arrow { text-align: center; color: var(--green); font-weight: 750; font-size: 12px; }
+
+    .state-line {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 7px;
+    }
+    .state, .arrow-chip {
+      padding: 7px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .state { border: 1px solid #b9c9c0; background: white; }
+    .state.active { color: var(--green); border-color: #77aa8b; background: var(--green-soft); }
+    .state.wait { color: var(--amber); border-color: #d9b76b; background: var(--amber-soft); }
+    .state.fail { color: var(--red); border-color: #d6a1a7; background: var(--red-soft); }
+    .arrow-chip { color: #718078; padding-left: 2px; padding-right: 2px; }
+
+    .branch-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 18px; }
+    .branch { padding: 12px; font-size: 12px; border-left: 3px solid var(--line); background: #f9fbfa; }
+    .branch strong { display: block; }
+
+    .turns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+    .turn { padding: 13px; border: 1px solid var(--line); background: white; border-radius: 5px; font-size: 12px; }
+    .turn b { display: block; color: var(--blue); margin-bottom: 4px; }
+
+    pre {
+      margin: 14px 0 0;
+      padding: 16px;
+      color: #e8f1eb;
+      background: var(--code);
+      border-radius: 6px;
+      overflow: auto;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+
+    .callout {
+      margin-top: 17px;
+      padding: 13px 15px;
+      border-left: 4px solid var(--amber);
+      background: var(--amber-soft);
+      color: #624817;
+      font-size: 13px;
+    }
+    .callout.blue { border-left-color: var(--blue); background: var(--blue-soft); color: #244d73; }
+
+    .api-grid { display: grid; grid-template-columns: 230px 1fr; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+    .api-grid > div { padding: 11px 13px; border-bottom: 1px solid var(--line); background: white; font-size: 13px; }
+    .api-grid > div:nth-last-child(-n+2) { border-bottom: 0; }
+    .api-grid .name { color: var(--blue); font-family: "SFMono-Regular", Consolas, monospace; background: #f4f7f9; }
+
+    .mock-window { border: 1px solid #9eaea5; border-radius: 7px; overflow: hidden; background: white; }
+    .mock-titlebar { display: flex; justify-content: space-between; gap: 16px; padding: 11px 14px; color: #edf6f0; background: #28483a; font-size: 12px; }
+    .mock-toolbar { display: grid; grid-template-columns: 1fr repeat(3, 140px); gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); }
+    .mock-control { padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 12px; }
+    .mock-row { display: grid; grid-template-columns: 1.3fr 1fr .75fr 1.1fr 70px; gap: 10px; padding: 11px 13px; border-bottom: 1px solid #e4ebe7; font-size: 12px; }
+    .mock-row:last-child { border-bottom: 0; }
+    .mock-row.header { color: var(--muted); font-weight: 700; background: #f5f8f6; }
+
+    table { width: 100%; border-collapse: collapse; background: white; font-size: 13px; }
+    th, td { padding: 11px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); background: #eef3f0; font-size: 12px; }
+    tr:last-child td { border-bottom: 0; }
+
+    .schema { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .schema-block { border: 1px solid var(--line); background: white; border-radius: 6px; overflow: hidden; }
+    .schema-block h3 { padding: 12px 14px; margin: 0; color: white; background: #315847; }
+    .schema-block ul { margin: 0; padding: 12px 14px 14px 31px; color: #43544b; font-size: 12px; }
+
+    .phases { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .phase { padding: 16px; border-top: 4px solid var(--blue); background: white; border-radius: 5px; }
+    .phase:first-child { border-top-color: var(--red); }
+    .phase b { display: block; margin-bottom: 7px; }
+    .phase span { color: var(--muted); font-size: 12px; }
+
+    .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; margin: 0; padding: 0; list-style: none; }
+    .checks li { padding: 9px 0 9px 27px; border-bottom: 1px solid var(--line); position: relative; font-size: 13px; }
+    .checks li::before { content: "□"; position: absolute; left: 2px; color: var(--green); font-size: 17px; top: 5px; }
+
+    .footer { padding: 28px clamp(24px, 6vw, 82px); color: var(--muted); border-top: 1px solid var(--line); font-size: 12px; }
+
+    @media (max-width: 980px) {
+      .layout { display: block; }
+      .rail { display: none; }
+      .architecture { grid-template-columns: 1fr; }
+      .connector { padding: 4px 0; }
+      .flow { grid-template-columns: 1fr 1fr; }
+      .flow-item::after { display: none; }
+      .phases, .branch-grid { grid-template-columns: 1fr 1fr; }
+      .mock-toolbar { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 650px) {
+      h1 { font-size: 30px; }
+      .split, .schema, .checks { grid-template-columns: 1fr; }
+      .flow, .turns, .phases, .branch-grid { grid-template-columns: 1fr; }
+      .switch-track { grid-template-columns: 1fr; }
+      .mock-toolbar, .mock-row { grid-template-columns: 1fr; }
+      .mock-row.header { display: none; }
+      .api-grid { grid-template-columns: 1fr; }
+      .api-grid > div { border-bottom: 1px solid var(--line) !important; }
+    }
+
+    @media print {
+      body { background: white; }
+      .layout { display: block; }
+      .rail { display: none; }
+      .hero { padding: 24px 0; color: var(--ink); background: white; border-bottom: 2px solid var(--green); }
+      .hero p, .eyebrow { color: var(--muted); }
+      .hero-meta span { color: var(--ink); border-color: var(--line); }
+      .content { max-width: none; padding: 0; }
+      section { break-inside: avoid; padding: 24px 0; }
+      .footer { padding: 20px 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="rail">
+      <div class="rail-brand">
+        <strong>Grok Supervisor</strong>
+        <span>产品与技术设计</span>
+      </div>
+      <nav aria-label="文档导航">
+        <a href="#goal">01 产品目标</a>
+        <a href="#architecture">02 总体结构</a>
+        <a href="#modes">03 无头 / 有头</a>
+        <a href="#ownership">04 输入所有权</a>
+        <a href="#lifecycle">05 生命周期</a>
+        <a href="#turns">06 多轮协议</a>
+        <a href="#plan">07 Plan 流程</a>
+        <a href="#mcp">08 MCP 接口</a>
+        <a href="#ui">09 Wails 首屏</a>
+        <a href="#terminal">10 系统终端</a>
+        <a href="#tray">11 原生托盘</a>
+        <a href="#recovery">12 恢复与取消</a>
+        <a href="#data">13 本地状态</a>
+        <a href="#stack">14 技术基线</a>
+        <a href="#delivery">15 实施阶段</a>
+        <a href="#acceptance">16 验收流程</a>
+      </nav>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <div class="eyebrow">Codex orchestration · Grok execution</div>
+        <h1>Grok Supervisor：无头执行与 TUI 动态切换</h1>
+        <p>Codex 负责理解、拆分、审批和验收；Grok 负责重型调查与实施；Wails 提供任务总览、托盘、恢复与按需 TUI。</p>
+        <div class="hero-meta">
+          <span>设计日期 2026-09-17</span>
+          <span>默认无头</span>
+          <span>同一持久 Session</span>
+          <span>Windows x64</span>
+          <span>macOS Intel / Apple Silicon</span>
+        </div>
+      </header>
+
+      <div class="content">
+        <section id="goal">
+          <div class="section-heading"><span class="section-no">01</span><h2>产品目标</h2></div>
+          <div class="flow">
+            <div class="flow-item"><strong>用户监督 Codex</strong><small>用户只面对一个主控 Agent，不跟踪 Grok 中间过程。</small></div>
+            <div class="flow-item"><strong>Codex 负责编排</strong><small>生成任务契约、拆分工作、审批 Plan、验收结果。</small></div>
+            <div class="flow-item"><strong>Grok 承担重活</strong><small>代码调查、实现、测试、修复和多轮返工。</small></div>
+            <div class="flow-item"><strong>Wails 提供控制面</strong><small>显示任务阶段、原生托盘、恢复和 TUI 切换。</small></div>
+          </div>
+          <div class="callout blue">不在 React 中重绘 Grok TUI，不转发完整思考流，不为每个 turn 新建 session，不随应用捆绑 Grok Build。</div>
+        </section>
+
+        <section id="architecture">
+          <div class="section-heading"><span class="section-no">02</span><h2>总体结构与权威状态</h2></div>
+          <div class="architecture">
+            <div class="actor"><h3>Codex</h3><p class="muted">MCP stdio</p><p>任务拆分、Plan 审批、最终验收。</p></div>
+            <div class="stack">
+              <div class="system"><h3>GrokMcp mcp</h3><p class="muted">同一程序的 MCP 模式，本机 IPC 连接桌面 Supervisor。</p></div>
+              <div class="system"><h3>Wails Supervisor</h3><p class="muted">托盘、会话总览、Leader、ACP、终端启动器、SQLite。</p></div>
+              <div class="system"><h3>唯一 Grok Leader</h3><p class="muted">承载多个持久 session，并允许无头控制与 TUI 附着。</p></div>
+            </div>
+            <div class="actor"><h3>Grok Sessions</h3><p class="muted">A · B · C</p><p>每个 job 映射一个 session，可独立 headless / headed。</p></div>
+          </div>
+          <table style="margin-top:18px">
+            <thead><tr><th>权威状态</th><th>负责内容</th></tr></thead>
+            <tbody>
+              <tr><td>Grok session</td><td>对话、Plan、工具调用、模型上下文和完整执行历史。</td></tr>
+              <tr><td>Wails Supervisor</td><td>job 映射、任务阶段、显示形态、输入所有权和边界事件。</td></tr>
+              <tr><td>SQLite</td><td>桌面应用崩溃或重启后恢复所需的最小控制状态。</td></tr>
+              <tr><td>系统终端</td><td>原生 Grok TUI 展示与人工输入，不承担任务持久化。</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="modes">
+          <div class="section-heading"><span class="section-no">03</span><h2>无头执行与 TUI 动态切换</h2></div>
+          <div class="split">
+            <div class="mode headless">
+              <h3>Headless · 默认</h3>
+              <ul>
+                <li>Supervisor 通过 ACP 驱动 Grok。</li>
+                <li>不打开终端窗口。</li>
+                <li>Wails 只显示阶段、最近动作和边界状态。</li>
+                <li>Codex 阻塞等待，不接收过程日志。</li>
+              </ul>
+            </div>
+            <div class="mode headed">
+              <h3>Headed · 按需</h3>
+              <ul>
+                <li>系统终端运行 <code>grok --resume &lt;session_id&gt;</code>。</li>
+                <li>显示原生思考、命令、编辑、测试和权限 UI。</li>
+                <li>用户可直接输入、取消或继续。</li>
+                <li>多个 TUI 可分布在不同显示器。</li>
+              </ul>
+            </div>
+          </div>
+          <div class="switch-track">
+            <div class="label"><b>headless</b><br><span class="muted">Supervisor 持有输入权</span></div>
+            <div class="arrow">显示 TUI →<br>← 转为无头</div>
+            <div class="label"><b>headed</b><br><span class="muted">系统终端附着原 session</span></div>
+          </div>
+          <div class="callout">关闭终端窗口不等于停止任务。TUI Ctrl+C 或 Wails“取消当前 turn”才会发送 ACP cancel。</div>
+        </section>
+
+        <section id="ownership">
+          <div class="section-heading"><span class="section-no">04</span><h2>输入所有权与多客户端回退</h2></div>
+          <div class="architecture">
+            <div class="actor"><h3>输入来源</h3><p>Supervisor prompt<br>Codex follow-up<br>TUI user input</p></div>
+            <div class="system"><h3>Per-session FIFO</h3><p>同一 session 仅允许一个 active prompt；busy 时所有新输入排队。</p></div>
+            <div class="actor"><h3>Grok session</h3><p>切换显示形态时队列不丢失，cancel 只影响 active prompt。</p></div>
+          </div>
+          <div class="split" style="margin-top:18px">
+            <div class="mode headed"><h3>优先：实时双端附着</h3><p>ACP 执行过程中，TUI 同时附着并实时显示；TUI 输入进入同一 FIFO。</p></div>
+            <div class="mode headless"><h3>固定回退：安全边界交接</h3><p>若当前 Grok 版本不稳定，则等待 turn 边界后把输入权交给 TUI；关闭 TUI 后再 session/load 恢复 Supervisor。</p></div>
+          </div>
+          <div class="callout blue">无论采用哪条路径，都不得创建替代 session，也不得重复已完成的工具调用。</div>
+        </section>
+
+        <section id="lifecycle">
+          <div class="section-heading"><span class="section-no">05</span><h2>任务与显示状态机</h2></div>
+          <div class="state-line">
+            <span class="state">created</span><span class="arrow-chip">→</span>
+            <span class="state">starting</span><span class="arrow-chip">→</span>
+            <span class="state active">planning</span><span class="arrow-chip">→</span>
+            <span class="state wait">plan_ready</span><span class="arrow-chip">→ approve →</span>
+            <span class="state active">executing</span><span class="arrow-chip">→</span>
+            <span class="state active">completed</span>
+          </div>
+          <div class="branch-grid">
+            <div class="branch"><strong>needs_input</strong>唤醒 Codex 和托盘提醒。</div>
+            <div class="branch"><strong>disconnected</strong>进入 recovering，恢复原 session。</div>
+            <div class="branch"><strong>cancelled</strong>保留 session，禁止自动继续。</div>
+            <div class="branch"><strong>blocked / failed</strong>返回短摘要与真实失败原因。</div>
+          </div>
+          <div class="state-line" style="margin-top:20px">
+            <span class="state">headless</span><span class="arrow-chip">→</span>
+            <span class="state wait">attaching</span><span class="arrow-chip">→</span>
+            <span class="state active">headed</span><span class="arrow-chip">→</span>
+            <span class="state wait">detaching</span><span class="arrow-chip">→</span>
+            <span class="state">headless</span>
+          </div>
+          <p class="muted">业务状态和显示状态必须分开存储；首屏使用阶段而不是无法证明的百分比。</p>
+        </section>
+
+        <section id="turns">
+          <div class="section-heading"><span class="section-no">06</span><h2>多轮任务协议</h2></div>
+          <div class="turns">
+            <div class="turn"><b>Turn 1</b>调查与 Plan</div>
+            <div class="turn"><b>Turn 2</b>实施</div>
+            <div class="turn"><b>Turn 3</b>测试与修复</div>
+            <div class="turn"><b>Turn 4</b>Codex 验收返工</div>
+            <div class="turn"><b>Turn N</b>最终完成</div>
+          </div>
+          <div class="callout"><code>prompt_complete</code> 只表示当前 turn 结束，不表示逻辑任务完成。</div>
+          <pre>&lt;GROK_TASK_STATE&gt;
+{"state":"working|needs_input|completed|blocked","summary":"...","next":"..."}
+&lt;/GROK_TASK_STATE&gt;</pre>
+          <table style="margin-top:18px">
+            <thead><tr><th>状态</th><th>Supervisor 行为</th></tr></thead>
+            <tbody>
+              <tr><td>working</td><td>自动向同一 session 发送继续。</td></tr>
+              <tr><td>needs_input</td><td>暂停自动推进，唤醒 Codex，并通知 Wails。</td></tr>
+              <tr><td>completed</td><td>返回完成摘要，让 Codex 做最终验收。</td></tr>
+              <tr><td>blocked</td><td>返回具体阻塞条件，不用“继续”盲目重试。</td></tr>
+              <tr><td>缺少标记</td><td>请求一次状态修复；再次缺少则转 needs_input。</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="plan">
+          <div class="section-heading"><span class="section-no">07</span><h2>Plan 审批流程</h2></div>
+          <div class="flow">
+            <div class="flow-item"><strong>grok_dispatch</strong><small>创建持久 session，注入 cwd 与任务契约，开启 Plan。</small></div>
+            <div class="flow-item"><strong>Grok 调查</strong><small>读取项目并写入 session 目录中的 plan.md。</small></div>
+            <div class="flow-item"><strong>plan_ready</strong><small>exit_plan_mode 停在审批边界，返回短计划给 Codex。</small></div>
+            <div class="flow-item"><strong>Codex 决策</strong><small>approve、revise 或 cancel；通过后继续原 session。</small></div>
+          </div>
+        </section>
+
+        <section id="mcp">
+          <div class="section-heading"><span class="section-no">08</span><h2>MCP 控制面</h2></div>
+          <div class="api-grid">
+            <div class="name">grok_dispatch</div><div>批量创建任务，默认 headless，返回 job 与 session 映射。</div>
+            <div class="name">grok_wait</div><div>等待 any / all 任务到达关键边界；不返回过程输出。</div>
+            <div class="name">grok_plan_decide</div><div>批准、退回或取消 Plan，并可附带修改意见。</div>
+            <div class="name">grok_followup</div><div>向同一 session 追加返工、继续或新的验收意见。</div>
+            <div class="name">grok_cancel_turn</div><div>取消当前 turn，保留 session 和排队状态。</div>
+            <div class="name">grok_set_view</div><div>在 headless 与 headed 之间切换，不重建任务。</div>
+            <div class="name">grok_status</div><div>返回阶段、显示状态、摘要和最近边界事件。</div>
+            <div class="name">grok_open_terminal</div><div>打开单任务 TUI 或集中 Grok Dashboard。</div>
+          </div>
+          <pre>[mcp_servers.grok_supervisor]
+command = "/path/to/GrokMcp"
+args = ["mcp"]
+startup_timeout_sec = 30
+tool_timeout_sec = 21600</pre>
+          <div class="callout blue"><b>grok_wait：</b>长时间阻塞，不轮询 Codex，不返回思考流、工具日志或完整 diff；只返回 plan_ready、needs_input、completed、blocked、failed、disconnected、cancelled。</div>
+        </section>
+
+        <section id="ui">
+          <div class="section-heading"><span class="section-no">09</span><h2>Wails 首屏</h2></div>
+          <div class="mock-window" aria-label="Wails 首屏示意">
+            <div class="mock-titlebar"><span>Grok Supervisor</span><span>Leader ●　MCP ●　3 工作　1 需输入</span></div>
+            <div class="mock-toolbar">
+              <div class="mock-control">搜索任务</div><div class="mock-control">状态：全部</div><div class="mock-control">项目：全部</div><div class="mock-control">形态：全部</div>
+            </div>
+            <div class="mock-row header"><span>任务</span><span>项目</span><span>阶段</span><span>最近动作</span><span>耗时</span></div>
+            <div class="mock-row"><span>Runtime 底座</span><span>suiyuan</span><span>实施中 · 无头</span><span>Running tests</span><span>18m</span></div>
+            <div class="mock-row"><span>登录重构</span><span>auth</span><span>Plan 就绪 · 有头</span><span>Plan ready</span><span>4m</span></div>
+            <div class="mock-row"><span>UI 测试</span><span>admin-web</span><span>需要输入 · 无头</span><span>Tests failed</span><span>11m</span></div>
+          </div>
+          <div class="split" style="margin-top:18px">
+            <div class="mode headless"><h3>任务操作</h3><p>显示 TUI / 转为无头、取消当前 turn、继续、打开项目目录、复制 session ID。</p></div>
+            <div class="mode headed"><h3>路由</h3><p><code>#/</code> 总览 · <code>#/sessions/:jobId</code> 详情 · <code>#/settings</code> 设置 · <code>#/diagnostics</code> 诊断。</p></div>
+          </div>
+          <p class="muted">使用 React Router createHashRouter。界面采用紧凑工作台布局，不使用营销型首页或嵌套卡片。</p>
+        </section>
+
+        <section id="terminal">
+          <div class="section-heading"><span class="section-no">10</span><h2>系统终端与多屏</h2></div>
+          <table>
+            <thead><tr><th>平台</th><th>默认终端</th><th>回退</th></tr></thead>
+            <tbody>
+              <tr><td>macOS Intel / Apple Silicon</td><td>Terminal.app</td><td>用户定义的终端命令模板。</td></tr>
+              <tr><td>Windows x64</td><td>Windows Terminal</td><td>PowerShell 新窗口。</td></tr>
+            </tbody>
+          </table>
+          <div class="flow" style="margin-top:18px; grid-template-columns:repeat(3, 1fr)">
+            <div class="flow-item"><strong>集中观察</strong><small>打开一个 <code>grok dashboard</code>。</small></div>
+            <div class="flow-item"><strong>单任务观察</strong><small>打开 <code>grok --resume &lt;session_id&gt;</code>。</small></div>
+            <div class="flow-item"><strong>多屏观察</strong><small>多个独立系统终端窗口，自由放到不同显示器。</small></div>
+          </div>
+          <div class="callout blue">Wails 不渲染 ANSI，不引入 xterm.js。设置页提供终端模板编辑与测试。</div>
+        </section>
+
+        <section id="tray">
+          <div class="section-heading"><span class="section-no">11</span><h2>原生托盘 / 菜单栏</h2></div>
+          <div class="split">
+            <div class="mode headless"><h3>图标状态</h3><p>空闲 · 工作中 · 需要输入 · 断连或失败</p></div>
+            <div class="mode headed"><h3>菜单</h3><p>打开主控 · 打开 Grok Dashboard · 工作中 N · 需要输入 N · 全部转为无头 · 设置 · 诊断 · 退出</p></div>
+          </div>
+          <div class="callout">关闭主窗口只隐藏到托盘。退出 Wails 不删除 Grok session；存在活动任务时必须显示明确警告。</div>
+        </section>
+
+        <section id="recovery">
+          <div class="section-heading"><span class="section-no">12</span><h2>断连恢复与用户取消</h2></div>
+          <div class="split">
+            <div class="mode headless">
+              <h3>断连恢复</h3>
+              <p>检测连接丢失 → disconnected → 重连唯一 Leader → session/load → 恢复 Plan → 检查工作树后继续。</p>
+              <p class="muted">十分钟内连续恢复失败两次，转 needs_input。</p>
+            </div>
+            <div class="mode headed">
+              <h3>用户取消</h3>
+              <p>Wails「取消当前 turn」→ ACP cancel → 当前 turn 停止 → session 保留 → needs_input，允许手动继续。任务级取消（PlanCancel）进入 cancelled，禁止自动恢复。</p>
+              <p class="muted">UserCancelled 的任务不得自动恢复。</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="data">
+          <div class="section-heading"><span class="section-no">13</span><h2>本地状态与数据边界</h2></div>
+          <div class="schema">
+            <div class="schema-block"><h3>jobs</h3><ul><li>job_id</li><li>codex_thread_id</li><li>grok_session_id</li><li>cwd / title</li><li>state / view_mode</li><li>input_owner</li><li>plan_digest</li><li>created_at / updated_at</li></ul></div>
+            <div class="schema-block"><h3>boundary_events</h3><ul><li>job_id</li><li>event_type</li><li>summary</li><li>created_at</li><li>不保存完整工具日志</li><li>不保存思考流</li></ul></div>
+            <div class="schema-block"><h3>settings</h3><ul><li>grok_binary_path</li><li>terminal_provider</li><li>terminal_command_template</li><li>default_view_mode</li><li>默认值：headless</li></ul></div>
+          </div>
+          <div class="callout blue">完整会话仍由 <code>~/.grok/sessions</code> 管理；认证由 Grok 管理；SQLite 只保存 Supervisor 控制状态。</div>
+        </section>
+
+        <section id="stack">
+          <div class="section-heading"><span class="section-no">14</span><h2>技术基线</h2></div>
+          <table>
+            <thead><tr><th>层</th><th>依赖</th><th>固定版本</th></tr></thead>
+            <tbody>
+              <tr><td>Backend</td><td>Go</td><td>1.27.1</td></tr>
+              <tr><td>Desktop</td><td>Wails</td><td>3.0.0-beta.23</td></tr>
+              <tr><td>Protocol</td><td>MCP Go SDK / coder ACP Go SDK</td><td>1.8.0 / 0.13.5</td></tr>
+              <tr><td>Storage</td><td>modernc.org/sqlite</td><td>1.59.0</td></tr>
+              <tr><td>Frontend</td><td>React / React Router</td><td>19.3.0 / 8.4.0</td></tr>
+              <tr><td>Styling</td><td>Tailwind CSS / shadcn CLI / lucide-react</td><td>4.3.3 / 4.21.0 / 1.47.0</td></tr>
+              <tr><td>Build & Test</td><td>Vite / TypeScript / Vitest / pnpm</td><td>8.3.0 / 7.0.2 / 5.0.1 / 12.4.1</td></tr>
+            </tbody>
+          </table>
+          <p class="muted">提交精确版本与 lockfile。shadcn 只生成 Button、Table、Tabs、Dialog、DropdownMenu、Select、Tooltip、Badge、ScrollArea、Separator、Command。</p>
+        </section>
+
+        <section id="delivery">
+          <div class="section-heading"><span class="section-no">15</span><h2>实施阶段</h2></div>
+          <div class="phases">
+            <div class="phase"><b>Phase 0 · 切换 Spike</b><span>验证唯一 Leader、稳定认证、运行中附着、输入 FIFO、无头/有头切换和取消语义。未通过不得继续完整 UI。</span></div>
+            <div class="phase"><b>Phase 1 · Supervisor</b><span>Leader 生命周期、ACP 状态机、多轮协议、恢复、SQLite、MCP stdio。</span></div>
+            <div class="phase"><b>Phase 2 · 系统终端</b><span>Terminal.app、Windows Terminal、集中模式、独立窗口、打开、聚焦和分离。</span></div>
+            <div class="phase"><b>Phase 3/4 · Wails 与发布</b><span>总览、详情、设置、诊断、托盘、通知；构建 darwin/amd64、darwin/arm64、windows/amd64。</span></div>
+          </div>
+        </section>
+
+        <section id="acceptance">
+          <div class="section-heading"><span class="section-no">16</span><h2>验收清单</h2></div>
+          <ul class="checks">
+            <li>新任务默认无头，且不会自动打开终端。</li>
+            <li>显示 TUI 后附着原 session，不创建替代会话。</li>
+            <li>关闭 TUI 后任务继续，状态切回 headless。</li>
+            <li>切换过程不丢输入、不重复执行工具调用。</li>
+            <li>Wails 可以取消无头 turn。</li>
+            <li>TUI Ctrl+C 不会触发自动继续。</li>
+            <li>同一 job 支持多个 Grok turn。</li>
+            <li>多个 TUI 可同时放到不同显示器。</li>
+            <li>Wails 首屏显示全部任务阶段和最近动作。</li>
+            <li>Codex 等待期间不接收过程日志。</li>
+            <li>Plan 必须经过 Codex 审批。</li>
+            <li>断连后恢复原 session。</li>
+            <li>Wails 重启后恢复任务清单。</li>
+            <li>Grok 缺失、未登录或版本不兼容时给出诊断。</li>
+            <li>macOS Intel、Apple Silicon、Windows x64 构建通过。</li>
+            <li>默认共享 Codex 当前目录；worktree 仅由任务显式选择。</li>
+          </ul>
+        </section>
+      </div>
+
+      <footer class="footer">Grok Supervisor Design · 2026-09-17 · Headless by default, native TUI on demand.</footer>
+    </main>
+  </div>
+</body>
+</html>

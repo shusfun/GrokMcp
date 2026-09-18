@@ -1,0 +1,89 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  darwin:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install and test
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+          pnpm build
+          go test ./...
+      - name: Package macOS
+        run: sh scripts/package.sh darwin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin
+          path: |
+            dist/GrokMcp-*-darwin-amd64.dmg
+            dist/GrokMcp-*-darwin-arm64.dmg
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install and test
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+          pnpm build
+          go test ./...
+      - name: Package Windows
+        shell: bash
+        run: sh scripts/package.sh windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/GrokMcp-*-windows-amd64.zip
+          if-no-files-found: error
+
+  release:
+    needs: [darwin, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" artifacts/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"

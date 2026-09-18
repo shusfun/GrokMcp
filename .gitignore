@@ -1,0 +1,14 @@
+bin/
+/dist/
+internal/web/dist/
+frontend/dist
+frontend/node_modules
+node_modules
+.DS_Store
+*.exe
+*.test
+/build/bin
+*.log
+.wails
+.idea
+.vscode

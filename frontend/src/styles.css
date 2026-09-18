@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #17211b;
+  --muted: #607068;
+  --line: #ccd8d1;
+  --paper: #f4f7f5;
+  --green: #176b48;
+  --green-soft: #e7f2eb;
+  --head: #28483a;
+  --wait: #9a6200;
+  --wait-soft: #fff4d9;
+  --fail: #a33b45;
+  --fail-soft: #fae9eb;
+  --surface: #ffffff;
+  --row: #f5f8f6;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}

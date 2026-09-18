@@ -1,0 +1,10 @@
+{
+  "name": "grokmcp",
+  "private": true,
+  "packageManager": "pnpm@12.4.1",
+  "scripts": {
+    "test": "pnpm --dir frontend test",
+    "build": "pnpm --dir frontend build",
+    "dev": "pnpm --dir frontend dev"
+  }
+}
