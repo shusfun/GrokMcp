@@ -2,6 +2,7 @@ package project
 
 import (
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -48,13 +49,13 @@ func CanonicalKey(path string) string {
 	return canonicalKey(path, runtime.GOOS == "windows")
 }
 
-func canonicalKey(path string, windows bool) string {
+func canonicalKey(p string, windows bool) string {
 	if windows {
-		path = strings.ReplaceAll(path, `\`, "/")
+		p = strings.ReplaceAll(p, `\`, "/")
 	}
-	p := trimTrailingSep(filepath.Clean(path))
+	p = trimTrailingSep(path.Clean(p))
 	if windows {
-		p = strings.ToLower(filepath.ToSlash(p))
+		p = strings.ToLower(p)
 	}
 	return p
 }
