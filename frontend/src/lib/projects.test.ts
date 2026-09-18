@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareProjects, sortProjects, type Project } from "./projects";
+import { compareProjects, persistentSkillMessage, projectDetailPath, sortProjects, type Project } from "./projects";
 
 function project(partial: Partial<Project>): Project {
   return {
@@ -31,5 +31,17 @@ describe("projects", () => {
   it("compare treats equal ids as 0", () => {
     const a = project({ project_id: "x", active_count: 1 });
     expect(compareProjects(a, a)).toBe(0);
+  });
+
+  it("after import with skill conflict, navigates to detail which keeps the message", () => {
+    const p = project({
+      project_id: "proj-auth",
+      skill_status: "conflict",
+      skill_message: "同路径已有用户文件，未覆盖。",
+    });
+    expect(projectDetailPath(p.project_id)).toBe("/projects/proj-auth");
+    expect(persistentSkillMessage(p)).toBe("同路径已有用户文件，未覆盖。");
+    expect(persistentSkillMessage(project({ skill_status: "installed" }))).toBe("");
+    expect(persistentSkillMessage(project({ skill_status: "error", skill_message: "permission denied" }))).toBe("permission denied");
   });
 });

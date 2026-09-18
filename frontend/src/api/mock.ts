@@ -2,6 +2,7 @@ import type { Job, JobPage } from "../lib/jobs";
 import { sortJobs } from "../lib/jobs";
 import type { Project, PromptResult } from "../lib/projects";
 import { sortProjects } from "../lib/projects";
+import { builtinPromptTemplate, generateDraft } from "../lib/prompt";
 import type { BoundaryEvent, Client, DebugSnapshot, Diagnose, InstallResult, Settings, StatusBar, TraceEvent } from "./client";
 
 const jobs: Job[] = [
@@ -85,27 +86,6 @@ function findProject(id: string): Project {
   if (!p) throw new Error("project not found");
   return p;
 }
-
-const builtinPrompt = `你是 Codex，正在通过 Grok Supervisor 与 Grok 协作。
-
-协作约定：
-- 重活交给 Grok 执行；你审计划和验收，不要自己做重实施。
-- 用 grok_wait 等待边界状态，不要看过程流。
-- 断连后继续原来的 Grok session，不要创建替换会话。
-- 模型由用户配置，不要修改模型设置。
-
-项目：{name}
-路径：{root}
-
-本次让 Grok 完成：
-{goal}
-
-约束：
-{constraints}
-
-验收：
-{acceptance}
-`;
 
 let settings: Settings = {
   grok_binary_path: "",
@@ -233,9 +213,9 @@ export const mockClient: Client = {
   },
   async generatePrompt(id, goal, constraints, acceptance): Promise<PromptResult> {
     const p = findProject(id);
-    const tmpl = p.prompt_template || builtinPrompt;
-    const text = tmpl.replaceAll("{name}", p.name).replaceAll("{root}", p.root).replaceAll("{goal}", goal || "（填写本次要完成的工作）").replaceAll("{constraints}", constraints || "（填写约束；没有则写无）").replaceAll("{acceptance}", acceptance || "（填写验收标准）");
-    return { project_id: id, text, builtin: builtinPrompt, goal, constraints, acceptance };
+    const tmpl = p.prompt_template || builtinPromptTemplate;
+    const text = generateDraft(tmpl, { name: p.name, root: p.root, goal, constraints, acceptance });
+    return { project_id: id, text, template: tmpl, builtin: builtinPromptTemplate, goal, constraints, acceptance };
   },
   async savePrompt(id, template) {
     const p = findProject(id);

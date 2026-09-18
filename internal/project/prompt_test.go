@@ -29,7 +29,25 @@ func TestGenerateUsesSavedTemplate(t *testing.T) {
 	if strings.TrimSpace(got.Text) != "ONLY X" && !strings.Contains(got.Text, "ONLY X") {
 		t.Fatalf("%q", got.Text)
 	}
+	if got.Template != "ONLY {goal}" {
+		t.Fatalf("template %q", got.Template)
+	}
 	if got.Builtin == p.PromptTemplate {
 		t.Fatal("builtin should stay built-in")
+	}
+}
+
+func TestGenerateKeepsRawTemplateWithDoubleBracePlaceholders(t *testing.T) {
+	tmpl := "path={{project_path}} goal={{goal}} c={{constraints}} a={{acceptance}}"
+	p := protocol.Project{ProjectID: "p1", Name: "n", Root: "/tmp/demo", PromptTemplate: tmpl}
+	got := Generate(p, "G", "C", "A")
+	if got.Template != tmpl {
+		t.Fatalf("template mutated %q", got.Template)
+	}
+	if strings.Contains(got.Text, "{{") || strings.Contains(got.Text, "{goal}") {
+		t.Fatalf("draft still has placeholders %q", got.Text)
+	}
+	if !strings.Contains(got.Text, "/tmp/demo") || !strings.Contains(got.Text, "G") {
+		t.Fatalf("draft %q", got.Text)
 	}
 }

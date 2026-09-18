@@ -51,20 +51,38 @@ func Generate(p protocol.Project, goal, constraints, acceptance string) protocol
 	goal = displaySection(goal, defaultGoal)
 	constraints = displaySection(constraints, defaultConstraints)
 	acceptance = displaySection(acceptance, defaultAcceptance)
-	text := tmpl
-	text = strings.ReplaceAll(text, placeholderName, emptyDash(p.Name))
-	text = strings.ReplaceAll(text, placeholderRoot, emptyDash(p.Root))
-	text = strings.ReplaceAll(text, placeholderGoal, goal)
-	text = strings.ReplaceAll(text, placeholderConstraints, constraints)
-	text = strings.ReplaceAll(text, placeholderAcceptance, acceptance)
+	text := applyTemplate(tmpl, p.Name, p.Root, goal, constraints, acceptance)
 	return protocol.PromptResult{
 		ProjectID:   p.ProjectID,
 		Text:        text,
+		Template:    tmpl,
 		Builtin:     BuiltinPromptTemplate(),
 		Goal:        goal,
 		Constraints: constraints,
 		Acceptance:  acceptance,
 	}
+}
+
+func applyTemplate(tmpl, name, root, goal, constraints, acceptance string) string {
+	repls := [][2]string{
+		{"{{project_path}}", emptyDash(root)},
+		{"{{name}}", emptyDash(name)},
+		{"{{root}}", emptyDash(root)},
+		{"{{goal}}", goal},
+		{"{{constraints}}", constraints},
+		{"{{acceptance}}", acceptance},
+		{"{project_path}", emptyDash(root)},
+		{placeholderName, emptyDash(name)},
+		{placeholderRoot, emptyDash(root)},
+		{placeholderGoal, goal},
+		{placeholderConstraints, constraints},
+		{placeholderAcceptance, acceptance},
+	}
+	text := tmpl
+	for _, pair := range repls {
+		text = strings.ReplaceAll(text, pair[0], pair[1])
+	}
+	return text
 }
 
 func displaySection(v, fallback string) string {

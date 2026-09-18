@@ -7,7 +7,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Dialog } from "../components/ui/dialog";
 import { EmptyState, ErrorState } from "../components/EmptyState";
-import { skillLabel, skillTone, sortProjects, type Project } from "../lib/projects";
+import { projectDetailPath, skillLabel, skillTone, sortProjects, type Project } from "../lib/projects";
 
 async function pickDirectory(): Promise<string> {
   if (isWails()) {
@@ -32,7 +32,6 @@ export function ProjectsPage() {
   const [pendingPath, setPendingPath] = useState("");
   const [installSkill, setInstallSkill] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
 
   const load = () => {
     client.listProjects().then((list) => {
@@ -59,11 +58,8 @@ export function ProjectsPage() {
     setBusy(true);
     client.importProject(pendingPath, installSkill).then((p) => {
       setPendingPath("");
-      if (p.skill_status === "conflict") {
-        setNotice(p.skill_message || "项目已登记，但 Skill 路径存在用户文件，未覆盖。");
-      }
       load();
-      navigate(`/projects/${p.project_id}`);
+      navigate(projectDetailPath(p.project_id));
     }).catch((e: Error) => setError(e.message)).finally(() => setBusy(false));
   };
 
@@ -82,7 +78,7 @@ export function ProjectsPage() {
               <button
                 type="button"
                 className="w-full rounded-md border border-[var(--line)] bg-[var(--surface)] px-3 py-3 text-left hover:border-[var(--accent)]"
-                onClick={() => navigate(`/projects/${p.project_id}`)}
+                onClick={() => navigate(projectDetailPath(p.project_id))}
               >
                 <span className="flex items-baseline justify-between gap-2">
                   <span className="truncate text-sm font-medium">{p.name}</span>
@@ -116,10 +112,7 @@ export function ProjectsPage() {
           <input type="checkbox" checked={installSkill} onChange={(e) => setInstallSkill(e.target.checked)} />
           安装工具说明 Skill
         </label>
-        <p className="mt-2 text-xs">默认安装。若同路径已有用户文件则不覆盖，项目仍会登记。</p>
-      </Dialog>
-      <Dialog open={Boolean(notice)} title="Skill 未覆盖" onOpenChange={(open) => { if (!open) setNotice(""); }}>
-        {notice}
+        <p className="mt-2 text-xs">默认安装。若同路径已有用户文件则不覆盖，项目仍会登记，详情页会显示 Skill 状态。</p>
       </Dialog>
     </div>
   );

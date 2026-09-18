@@ -54,7 +54,7 @@ func Probe(root string) protocol.Project {
 			return protocol.Project{SkillStatus: protocol.SkillMissing}
 		}
 		return protocol.Project{
-			SkillStatus:  protocol.SkillConflict,
+			SkillStatus:  protocol.SkillError,
 			SkillMessage: err.Error(),
 		}
 	}
@@ -73,6 +73,9 @@ func Probe(root string) protocol.Project {
 
 func ApplyProbe(p *protocol.Project) {
 	got := Probe(p.Root)
+	if got.SkillStatus == protocol.SkillMissing && p.SkillStatus == protocol.SkillError && strings.TrimSpace(p.SkillMessage) != "" {
+		return
+	}
 	p.SkillStatus = got.SkillStatus
 	p.SkillVersion = got.SkillVersion
 	p.SkillMessage = got.SkillMessage

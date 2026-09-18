@@ -262,6 +262,7 @@ const (
 	SkillInstalled SkillStatus = "installed"
 	SkillOutdated  SkillStatus = "outdated"
 	SkillConflict  SkillStatus = "conflict"
+	SkillError     SkillStatus = "error"
 )
 
 type Project struct {
@@ -306,6 +307,7 @@ type SavePromptRequest struct {
 type PromptResult struct {
 	ProjectID   string `json:"project_id"`
 	Text        string `json:"text"`
+	Template    string `json:"template"`
 	Builtin     string `json:"builtin"`
 	Goal        string `json:"goal,omitempty"`
 	Constraints string `json:"constraints,omitempty"`

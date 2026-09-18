@@ -46,12 +46,23 @@ func (s *Service) ImportProject(_ context.Context, path string, installSkill boo
 	if err := s.store.PutProject(p); err != nil {
 		return protocol.Project{}, err
 	}
+	var skillErr error
 	if installSkill {
-		if err := project.Install(p.Root); err != nil && !errors.Is(err, project.ErrSkillConflict) {
-			return protocol.Project{}, err
-		}
+		skillErr = project.Install(p.Root)
 	}
-	return s.refreshProject(p.ProjectID, true)
+	out, err := s.refreshProject(p.ProjectID, true)
+	if err != nil {
+		return out, err
+	}
+	if skillErr == nil || errors.Is(skillErr, project.ErrSkillConflict) {
+		return out, nil
+	}
+	if out.SkillStatus != protocol.SkillConflict {
+		out.SkillStatus = protocol.SkillError
+		out.SkillMessage = skillErr.Error()
+		_ = s.store.SaveProjectSkill(out.ProjectID, out.SkillStatus, out.SkillVersion, s.clock.Now())
+	}
+	return out, nil
 }
 
 func (s *Service) ListProjects(context.Context) ([]protocol.Project, error) {
@@ -125,6 +136,7 @@ func (s *Service) SkillRemove(_ context.Context, id string) (protocol.Project, e
 		out, _ := s.refreshProject(id, true)
 		return out, err
 	}
+	_ = s.store.SaveProjectSkill(id, protocol.SkillMissing, "", s.clock.Now())
 	return s.refreshProject(id, true)
 }
 

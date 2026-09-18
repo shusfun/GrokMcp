@@ -1,4 +1,4 @@
-export type SkillStatus = "missing" | "installed" | "outdated" | "conflict";
+export type SkillStatus = "missing" | "installed" | "outdated" | "conflict" | "error";
 
 export type Project = {
   project_id: string;
@@ -21,6 +21,7 @@ export type Project = {
 export type PromptResult = {
   project_id: string;
   text: string;
+  template?: string;
   builtin: string;
   goal?: string;
   constraints?: string;
@@ -41,6 +42,20 @@ export function sortProjects(list: Project[]): Project[] {
   return [...list].sort(compareProjects);
 }
 
+export function projectDetailPath(projectId: string): string {
+  return `/projects/${projectId}`;
+}
+
+export function persistentSkillMessage(project: Pick<Project, "skill_status" | "skill_message">): string {
+  if (project.skill_status === "conflict") {
+    return project.skill_message || "同路径已有用户文件，未覆盖。";
+  }
+  if (project.skill_status === "error") {
+    return project.skill_message || "Skill 安装失败。";
+  }
+  return "";
+}
+
 export function skillLabel(status: SkillStatus | string): string {
   switch (status) {
     case "installed":
@@ -49,6 +64,8 @@ export function skillLabel(status: SkillStatus | string): string {
       return "Skill 可更新";
     case "conflict":
       return "Skill 冲突";
+    case "error":
+      return "Skill 出错";
     default:
       return "Skill 未安装";
   }
@@ -61,6 +78,7 @@ export function skillTone(status: SkillStatus | string): "ok" | "wait" | "fail" 
     case "outdated":
       return "wait";
     case "conflict":
+    case "error":
       return "fail";
     default:
       return "default";

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"grokmcp/internal/agent"
@@ -152,6 +153,38 @@ func TestDispatchDiscoversWithoutSkill(t *testing.T) {
 	}
 }
 
+func TestImportSkillWriteErrorStillImportedSameID(t *testing.T) {
+	s := newTest(t, agent.NewFake(), terminal.NewFake())
+	root := t.TempDir()
+	block := project.SkillDir(root)
+	if err := os.MkdirAll(filepath.Dir(block), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(block, []byte("not-a-dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ImportProject(context.Background(), root, true)
+	if err != nil {
+		t.Fatalf("import should succeed: %v", err)
+	}
+	if !got.Imported || got.SkillStatus != protocol.SkillError || got.SkillMessage == "" {
+		t.Fatalf("%+v", got)
+	}
+	if _, err := os.Stat(project.SkillPath(root)); err == nil {
+		t.Fatal("wrote skill over blocked path")
+	}
+	again, err := s.ImportProject(context.Background(), root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ProjectID != got.ProjectID {
+		t.Fatalf("project_id %q vs %q", again.ProjectID, got.ProjectID)
+	}
+	if !again.Imported || again.SkillStatus != protocol.SkillError {
+		t.Fatalf("retry %+v", again)
+	}
+}
+
 func TestPromptGenerateDoesNotDispatch(t *testing.T) {
 	fake := agent.NewFake()
 	s := newTest(t, fake, terminal.NewFake())
@@ -172,6 +205,18 @@ func TestPromptGenerateDoesNotDispatch(t *testing.T) {
 	saved, err := s.SavePrompt(context.Background(), protocol.SavePromptRequest{ProjectID: p.ProjectID, Template: "saved {goal}"})
 	if err != nil || saved.PromptTemplate != "saved {goal}" {
 		t.Fatalf("%+v %v", saved, err)
+	}
+	again, err := s.GeneratePrompt(context.Background(), protocol.GeneratePromptRequest{
+		ProjectID: p.ProjectID, Goal: "二次", Constraints: "仍约束", Acceptance: "再验收",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Template != "saved {goal}" {
+		t.Fatalf("raw template lost: %q", again.Template)
+	}
+	if !strings.Contains(again.Text, "二次") || strings.Contains(again.Text, "{goal}") {
+		t.Fatalf("draft %q", again.Text)
 	}
 }
 
