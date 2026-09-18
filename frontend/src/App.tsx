@@ -9,7 +9,7 @@ import { Dialog } from "./components/ui/dialog";
 import { Button } from "./components/ui/button";
 import { isWails, listenDesktop, quitApp } from "./api/wails";
 
-const emptyBar: StatusBarData = { leader_ok: false, mcp_ok: false, working: 0, needs_input: 0 };
+const emptyBar: StatusBarData = { leader_ok: false, acp_ok: false, mcp_ok: false, db_ok: false, working: 0, needs_input: 0 };
 
 export function App() {
   const [quitWarn, setQuitWarn] = useState(false);

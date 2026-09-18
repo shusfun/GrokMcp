@@ -18,14 +18,14 @@ func (e Exec) OpenDirectory(_ context.Context, cwd string) error {
 	return exec.Command("open", cwd).Start()
 }
 
-func (e Exec) spawn(_ context.Context, cwd, command, sessionID string) (Handle, error) {
+func (e Exec) spawn(ctx context.Context, cwd, command, sessionID string) (Handle, error) {
 	if strings.TrimSpace(e.Template) != "" {
 		line := Render(e.Template, "grok", command, cwd, sessionID)
-		cmd := exec.Command("sh", "-c", line)
+		cmd := exec.CommandContext(ctx, "sh", "-c", line)
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
-		return procHandle{cmd: cmd}, nil
+		return procHandle{cmd: cmd, sessionID: sessionID}, nil
 	}
 	title := SessionTitle(sessionID)
 	inner := CommandInDir(cwd, command)
@@ -35,33 +35,52 @@ func (e Exec) spawn(_ context.Context, cwd, command, sessionID string) (Handle, 
     set custom title of t to %s
   end try
   activate
-  return id of front window as text
+  set wid to id of front window as text
+  set ty to ""
+  try
+    set ty to tty of t as text
+  end try
+  return wid & "," & ty
 end tell`, appleQuote(inner), appleQuote(title))
-	out, err := runOSA(script)
+	out, err := runOSA(ctx, script)
 	if err != nil {
 		return nil, err
 	}
-	id := parseWindowID(out)
+	id, tty := parseSpawnOut(out)
 	rememberTab(title, id)
-	return tabHandle{id: id, title: title}, nil
+	h := &tabHandle{id: id, title: title, sessionID: sessionID, tty: tty}
+	h.grokPID = FindResumePID(sessionID)
+	return h, nil
 }
 
-func (e Exec) focus(_ context.Context, title string) (bool, error) {
+func (e Exec) focus(ctx context.Context, title string) (bool, error) {
 	if v, ok := tabIDs.Load(title); ok {
-		if id, _ := v.(string); focusByID(id) {
+		if id, _ := v.(string); focusByID(ctx, id) {
 			return true, nil
 		}
 	}
-	return focusByTitle(title)
+	return focusByTitle(ctx, title)
 }
 
 type tabHandle struct {
-	id    string
-	title string
+	id        string
+	title     string
+	sessionID string
+	tty       string
+	grokPID   int
+	foundGrok bool
 }
 
-func (h tabHandle) Wait() error {
+func (h *tabHandle) Wait() error {
 	for {
+		if pid := h.PID(); pid > 0 {
+			h.grokPID = pid
+			h.foundGrok = true
+		}
+		if h.foundGrok && !processAlive(h.grokPID) && FindResumePID(h.sessionID) == 0 {
+			forgetTab(h.title)
+			return nil
+		}
 		if !h.alive() {
 			forgetTab(h.title)
 			return nil
@@ -70,13 +89,30 @@ func (h tabHandle) Wait() error {
 	}
 }
 
-func (h tabHandle) PID() int { return 0 }
+func (h *tabHandle) PID() int {
+	if h.grokPID > 0 && processAlive(h.grokPID) {
+		return h.grokPID
+	}
+	if pid := FindResumePID(h.sessionID); pid > 0 {
+		h.grokPID = pid
+		h.foundGrok = true
+		return pid
+	}
+	return 0
+}
 
-func (h tabHandle) Close() error {
-	_ = closeTerminalWindow(h.id, h.title)
+func (h *tabHandle) WindowID() string { return h.id }
+
+func (h *tabHandle) Close() error {
+	if pid := h.PID(); pid > 0 {
+		_ = terminatePID(pid, 2*time.Second)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = closeTerminalWindow(ctx, h.id, h.title)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if !h.alive() {
+		if FindResumePID(h.sessionID) == 0 {
 			forgetTab(h.title)
 			return nil
 		}
@@ -86,18 +122,22 @@ func (h tabHandle) Close() error {
 	return nil
 }
 
-func (h tabHandle) Focus() (bool, error) {
-	if focusByID(h.id) {
+func (h *tabHandle) Focus() (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if focusByID(ctx, h.id) {
 		return true, nil
 	}
-	return focusByTitle(h.title)
+	return focusByTitle(ctx, h.title)
 }
 
-func (h tabHandle) alive() bool {
+func (h *tabHandle) alive() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	if h.id != "" {
-		return windowIDExists(h.id)
+		return windowIDExists(ctx, h.id)
 	}
-	return titleExists(h.title)
+	return titleExists(ctx, h.title)
 }
 
 func rememberTab(title, id string) {
@@ -122,15 +162,31 @@ func parseWindowID(s string) string {
 	return s
 }
 
-func runOSA(script string) (string, error) {
-	out, err := exec.Command("osascript", "-e", script).Output()
+func parseSpawnOut(s string) (id, tty string) {
+	s = strings.TrimSpace(s)
+	id, tty, _ = strings.Cut(s, ",")
+	id = parseWindowID(id)
+	tty = strings.TrimSpace(tty)
+	return id, tty
+}
+
+func runOSA(ctx context.Context, script string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+	}
+	out, err := exec.CommandContext(ctx, "osascript", "-e", script).Output()
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
-func windowIDExists(id string) bool {
+func windowIDExists(ctx context.Context, id string) bool {
 	if parseWindowID(id) == "" {
 		return false
 	}
@@ -142,19 +198,19 @@ func windowIDExists(id string) bool {
     return "0"
   end try
 end tell`, id)
-	out, err := runOSA(script)
+	out, err := runOSA(ctx, script)
 	return err == nil && out == "1"
 }
 
-func titleExists(title string) bool {
+func titleExists(ctx context.Context, title string) bool {
 	if strings.TrimSpace(title) == "" {
 		return false
 	}
-	focused, err := focusProbe(title, false)
+	focused, err := focusProbe(ctx, title, false)
 	return err == nil && focused
 }
 
-func focusByID(id string) bool {
+func focusByID(ctx context.Context, id string) bool {
 	if parseWindowID(id) == "" {
 		return false
 	}
@@ -168,15 +224,15 @@ func focusByID(id string) bool {
     return "0"
   end try
 end tell`, id)
-	out, err := runOSA(script)
+	out, err := runOSA(ctx, script)
 	return err == nil && out == "1"
 }
 
-func focusByTitle(title string) (bool, error) {
-	return focusProbe(title, true)
+func focusByTitle(ctx context.Context, title string) (bool, error) {
+	return focusProbe(ctx, title, true)
 }
 
-func focusProbe(title string, activate bool) (bool, error) {
+func focusProbe(ctx context.Context, title string, activate bool) (bool, error) {
 	tabHit := `return "1"`
 	winHit := `return "1"`
 	if activate {
@@ -203,21 +259,21 @@ func focusProbe(title string, activate bool) (bool, error) {
   end repeat
   return "0"
 end tell`, appleQuote(title), tabHit, appleQuote(title), winHit)
-	out, err := runOSA(script)
+	out, err := runOSA(ctx, script)
 	if err != nil {
 		return false, err
 	}
 	return out == "1", nil
 }
 
-func closeTerminalWindow(id, title string) error {
+func closeTerminalWindow(ctx context.Context, id, title string) error {
 	if parseWindowID(id) != "" {
 		script := fmt.Sprintf(`tell application "Terminal"
   try
     close (first window whose id is %s) saving no
   end try
 end tell`, id)
-		_, err := runOSA(script)
+		_, err := runOSA(ctx, script)
 		return err
 	}
 	if strings.TrimSpace(title) == "" {
@@ -247,7 +303,7 @@ end tell`, id)
     end try
   end repeat
 end tell`, appleQuote(title), appleQuote(title))
-	_, err := runOSA(script)
+	_, err := runOSA(ctx, script)
 	return err
 }
 
@@ -256,5 +312,3 @@ func appleQuote(s string) string {
 	s = strings.ReplaceAll(s, `"`, `\"`)
 	return `"` + s + `"`
 }
-
-

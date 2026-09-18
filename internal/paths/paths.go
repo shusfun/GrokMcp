@@ -67,6 +67,24 @@ func LockPath() (string, error) {
 	return filepath.Join(dir, "supervisor.lock"), nil
 }
 
+func LogsDir() (string, error) {
+	dir, err := AppDir()
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(dir, "logs")
+	return p, os.MkdirAll(p, 0o700)
+}
+
+func TracesDir() (string, error) {
+	dir, err := AppDir()
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(dir, "traces")
+	return p, os.MkdirAll(p, 0o700)
+}
+
 func LeaderSocket() string {
 	if p := os.Getenv("GROK_LEADER_SOCKET"); p != "" {
 		return p

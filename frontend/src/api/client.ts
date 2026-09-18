@@ -15,6 +15,7 @@ export type Diagnose = {
   leader_socket: string;
   compatible: boolean;
   attach_mode: string;
+  acp_ok?: boolean;
   error?: string;
 };
 
@@ -26,9 +27,41 @@ export type InstallResult = {
 
 export type StatusBar = {
   leader_ok: boolean;
+  acp_ok?: boolean;
   mcp_ok: boolean;
+  db_ok?: boolean;
+  debug_enabled?: boolean;
+  stalled?: boolean;
   working: number;
   needs_input: number;
+};
+
+export type TraceEvent = {
+  seq: number;
+  time: string;
+  level: string;
+  source: string;
+  event: string;
+  job_id?: string;
+  session_id?: string;
+  turn_id?: string;
+  state?: string;
+  view_mode?: string;
+  input_owner?: string;
+  busy?: boolean;
+  queue_length?: number;
+  message?: string;
+  fields?: Record<string, unknown>;
+};
+
+export type DebugSnapshot = {
+  job_id: string;
+  cursor: number;
+  events: TraceEvent[];
+};
+
+export type DebugExport = {
+  path: string;
 };
 
 export type BoundaryEvent = {
@@ -61,6 +94,9 @@ export type Client = {
   diagnose(): Promise<Diagnose>;
   installGrok(): Promise<InstallResult>;
   testTerminal(template: string): Promise<void>;
+  debugSet(jobId: string, enabled: boolean, payloads?: boolean): Promise<Job>;
+  debugSnapshot(jobId: string, cursor?: number, limit?: number, levels?: string[], sources?: string[]): Promise<DebugSnapshot>;
+  debugExport(jobId: string): Promise<DebugExport>;
   appVersion(): Promise<string>;
   checkUpdate(): Promise<UpdateRelease | null>;
   downloadUpdate(): Promise<void>;

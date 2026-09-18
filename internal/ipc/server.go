@@ -69,7 +69,7 @@ func (s *Server) handle(c net.Conn) {
 		if err := json.Unmarshal(sc.Bytes(), &req); err != nil {
 			continue
 		}
-		if req.Method == "wait" {
+		if req.Method == "wait" || req.Method == "debugWait" {
 			go func(req Request) {
 				res, err := s.dispatch(ctx, req)
 				out := Response{ID: req.ID}
@@ -203,6 +203,34 @@ func (s *Server) dispatch(ctx context.Context, req Request) (json.RawMessage, er
 		}
 		_ = json.Unmarshal(req.Params, &in)
 		return marshal(struct{}{}, s.svc.TestTerminal(ctx, in.Template))
+	case "debugSet":
+		var in protocol.DebugSetRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.DebugSet(ctx, in)
+		return marshal(out, err)
+	case "debugSnapshot":
+		var in protocol.DebugSnapshotRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.DebugSnapshot(ctx, in)
+		return marshal(out, err)
+	case "debugWait":
+		var in protocol.DebugWaitRequest
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			return nil, err
+		}
+		out, err := s.svc.DebugWait(ctx, in)
+		return marshal(out, err)
+	case "debugExport":
+		var in struct {
+			JobID string `json:"job_id"`
+		}
+		_ = json.Unmarshal(req.Params, &in)
+		out, err := s.svc.DebugExport(ctx, in.JobID)
+		return marshal(out, err)
 	case "setMCP":
 		var in struct {
 			Live bool `json:"live"`

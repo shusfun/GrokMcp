@@ -21,7 +21,7 @@ func (e Exec) spawn(_ context.Context, cwd, command, sessionID string) (Handle, 
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
-		return procHandle{cmd: cmd}, nil
+		return procHandle{cmd: cmd, sessionID: sessionID}, nil
 	}
 	inner := "title " + title + " && " + CommandInDirWindows(cwd, command)
 	cmd := exec.Command("cmd", "/k", inner)
@@ -29,7 +29,7 @@ func (e Exec) spawn(_ context.Context, cwd, command, sessionID string) (Handle, 
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return procHandle{cmd: cmd}, nil
+	return procHandle{cmd: cmd, sessionID: sessionID}, nil
 }
 
 func (e Exec) focus(_ context.Context, title string) (bool, error) {

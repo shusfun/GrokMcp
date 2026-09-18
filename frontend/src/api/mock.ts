@@ -1,5 +1,5 @@
 import type { Job } from "../lib/jobs";
-import type { BoundaryEvent, Client, Diagnose, InstallResult, Settings, StatusBar } from "./client";
+import type { BoundaryEvent, Client, DebugSnapshot, Diagnose, InstallResult, Settings, StatusBar, TraceEvent } from "./client";
 
 const jobs: Job[] = [
   {
@@ -73,6 +73,28 @@ let settings: Settings = {
 };
 
 let grokInstalled = false;
+const traces = new Map<string, TraceEvent[]>();
+let seq = 0;
+pushTrace("job-runtime", "queue.enqueued", { kind: "plan" });
+pushTrace("job-runtime", "pump.skipped", { reason: "tui_owns" });
+pushTrace("job-auth", "plan.ready");
+
+function pushTrace(jobId: string, event: string, fields?: Record<string, unknown>) {
+  seq += 1;
+  const ev: TraceEvent = {
+    seq,
+    time: new Date().toISOString(),
+    level: event.includes("stalled") ? "warn" : "info",
+    source: "supervisor",
+    event,
+    job_id: jobId,
+    message: event,
+    fields,
+  };
+  const list = traces.get(jobId) ?? [];
+  list.push(ev);
+  traces.set(jobId, list);
+}
 
 const listeners = new Set<() => void>();
 function emit() {
@@ -97,7 +119,7 @@ export const mockClient: Client = {
     return [{ id: 1, job_id: jobId, event_type: job.state, summary: job.last_action ?? "", created_at: job.updated_at }] satisfies BoundaryEvent[];
   },
   async statusBar(): Promise<StatusBar> {
-    return { leader_ok: true, mcp_ok: true, working: 1, needs_input: 1 };
+    return { leader_ok: true, acp_ok: true, mcp_ok: true, db_ok: true, debug_enabled: jobs.some((j) => j.debug_enabled), stalled: jobs.some((j) => j.stalled), working: 1, needs_input: 1 };
   },
   async setView(jobId, view) {
     const job = find(jobId);
@@ -171,6 +193,20 @@ export const mockClient: Client = {
     return { ok: true, grok_path: "/Users/shus/.grok/bin/grok", log: "mock: installed to ~/.grok/bin/grok" };
   },
   async testTerminal() {},
+  async debugSet(jobId, enabled, payloads) {
+    const job = find(jobId);
+    job.debug_enabled = enabled;
+    pushTrace(jobId, enabled ? "debug.enabled" : "debug.disabled", { payloads: Boolean(payloads) });
+    emit();
+    return { ...job };
+  },
+  async debugSnapshot(jobId, cursor = 0, limit = 200): Promise<DebugSnapshot> {
+    const list = (traces.get(jobId) ?? []).filter((ev) => ev.seq > cursor).slice(0, limit);
+    return { job_id: jobId, cursor: list.at(-1)?.seq ?? cursor, events: list };
+  },
+  async debugExport(jobId) {
+    return { path: `/tmp/${jobId}.jsonl` };
+  },
   async appVersion() {
     return "dev";
   },

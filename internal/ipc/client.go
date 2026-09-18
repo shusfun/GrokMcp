@@ -151,6 +151,18 @@ func (c *Client) TestTerminal(ctx context.Context, template string) error {
 	_, err := c.call(ctx, "testTerminal", map[string]string{"template": template})
 	return err
 }
+func (c *Client) DebugSet(ctx context.Context, req protocol.DebugSetRequest) (protocol.Job, error) {
+	return decode[protocol.Job](c.call(ctx, "debugSet", req))
+}
+func (c *Client) DebugSnapshot(ctx context.Context, req protocol.DebugSnapshotRequest) (protocol.DebugSnapshot, error) {
+	return decode[protocol.DebugSnapshot](c.call(ctx, "debugSnapshot", req))
+}
+func (c *Client) DebugWait(ctx context.Context, req protocol.DebugWaitRequest) (protocol.DebugSnapshot, error) {
+	return decode[protocol.DebugSnapshot](c.call(ctx, "debugWait", req))
+}
+func (c *Client) DebugExport(ctx context.Context, jobID string) (protocol.DebugExportResult, error) {
+	return decode[protocol.DebugExportResult](c.call(ctx, "debugExport", map[string]string{"job_id": jobID}))
+}
 func (c *Client) Subscribe(fn func(protocol.Event)) func() {
 	c.smu.Lock()
 	c.seq++

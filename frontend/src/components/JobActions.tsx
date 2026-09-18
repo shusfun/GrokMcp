@@ -13,9 +13,13 @@ type Props = {
   onContinue: () => void;
   onOpenDir: () => void;
   onPlanDecide?: (decide: "approve" | "revise" | "cancel", notes: string) => void;
+  onDebug?: () => void;
+  onTrace?: () => void;
+  onExport?: () => void;
+  onCopyState?: () => void;
 };
 
-export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, onOpenDir, onPlanDecide }: Props) {
+export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, onOpenDir, onPlanDecide, onDebug, onTrace, onExport, onCopyState }: Props) {
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -64,6 +68,10 @@ export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, o
           <DropdownItem onClick={() => void navigator.clipboard.writeText(job.grok_session_id ?? "")}>
             <span className="flex items-center gap-2"><Copy className="h-3.5 w-3.5" />复制 session ID</span>
           </DropdownItem>
+          {onDebug ? <DropdownItem onClick={() => run(onDebug)}>{job.debug_enabled ? "关闭调试" : "开启调试"}</DropdownItem> : null}
+          {onTrace ? <DropdownItem onClick={() => run(onTrace)}>查看 Trace</DropdownItem> : null}
+          {onExport ? <DropdownItem onClick={() => run(onExport)}>导出诊断包</DropdownItem> : null}
+          {onCopyState ? <DropdownItem onClick={() => run(onCopyState)}>复制内部状态</DropdownItem> : null}
         </DropdownMenu>
       </div>
       {error ? <p className="text-sm text-[var(--fail)]">{error}</p> : null}

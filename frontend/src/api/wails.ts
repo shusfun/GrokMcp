@@ -1,5 +1,5 @@
 import type { Job } from "../lib/jobs";
-import type { BoundaryEvent, Client } from "./client";
+import type { BoundaryEvent, Client, DebugSnapshot } from "./client";
 
 const service = "grokmcp/internal/app.Service";
 
@@ -36,6 +36,11 @@ export const wailsClient: Client = {
   diagnose: () => call("Diagnose"),
   installGrok: () => call("InstallGrok"),
   testTerminal: (t) => call("TestTerminal", t),
+  debugSet: (id, enabled, payloads) => call("DebugSet", id, enabled, Boolean(payloads)),
+  debugSnapshot: async (id, cursor, limit, levels, sources) =>
+    (await call<DebugSnapshot | null>("DebugSnapshot", id, cursor ?? 0, limit ?? 200, levels ?? [], sources ?? []))
+    ?? { job_id: id, cursor: cursor ?? 0, events: [] },
+  debugExport: (id) => call("DebugExport", id),
   appVersion: () => call("AppVersion"),
   checkUpdate: () => call("CheckUpdate"),
   downloadUpdate: () => call("DownloadUpdate"),

@@ -25,6 +25,10 @@ type Backend interface {
 	StatusBar(ctx context.Context) (protocol.StatusBar, error)
 	Events(ctx context.Context, jobID string) ([]protocol.BoundaryEvent, error)
 	TestTerminal(ctx context.Context, template string) error
+	DebugSet(ctx context.Context, req protocol.DebugSetRequest) (protocol.Job, error)
+	DebugSnapshot(ctx context.Context, req protocol.DebugSnapshotRequest) (protocol.DebugSnapshot, error)
+	DebugWait(ctx context.Context, req protocol.DebugWaitRequest) (protocol.DebugSnapshot, error)
+	DebugExport(ctx context.Context, jobID string) (protocol.DebugExportResult, error)
 	Subscribe(fn func(protocol.Event)) (unsubscribe func())
 	Close() error
 }

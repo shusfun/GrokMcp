@@ -72,4 +72,26 @@ func addTools(server *mcp.Server, backend core.Backend) {
 		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.OpenTerminalRequest) (*mcp.CallToolResult, struct{}, error) {
 			return nil, struct{}{}, backend.OpenTerminal(ctx, in)
 		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_debug_set", Description: "为指定任务打开或关闭调试记录；默认不把过程日志发给 Codex。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.DebugSetRequest) (*mcp.CallToolResult, protocol.Job, error) {
+			out, err := backend.DebugSet(ctx, in)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_debug_snapshot", Description: "按 cursor 增量读取有限条结构化日志，不含完整 transcript。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.DebugSnapshotRequest) (*mcp.CallToolResult, protocol.DebugSnapshot, error) {
+			out, err := backend.DebugSnapshot(ctx, in)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_debug_wait", Description: "等待下一条 any/warning/error/boundary 调试事件。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.DebugWaitRequest) (*mcp.CallToolResult, protocol.DebugSnapshot, error) {
+			out, err := backend.DebugWait(ctx, in)
+			return nil, out, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_debug_export", Description: "导出任务 jsonl 诊断包路径。"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+			JobID string `json:"job_id" jsonschema:"job id"`
+		}) (*mcp.CallToolResult, protocol.DebugExportResult, error) {
+			out, err := backend.DebugExport(ctx, in.JobID)
+			return nil, out, err
+		})
 }

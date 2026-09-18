@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"runtime"
+	"time"
 )
 
 type Exec struct {
@@ -31,9 +32,18 @@ func (e Exec) TestTemplate(ctx context.Context, template, command string) error 
 	return c.Run()
 }
 
-type procHandle struct{ cmd *exec.Cmd }
+type procHandle struct {
+	cmd       *exec.Cmd
+	sessionID string
+	windowID  string
+	grokPID   int
+}
 
 func (h procHandle) Wait() error {
+	if h.sessionID != "" {
+		waitResumeOrCmd(h.sessionID, h.cmd)
+		return nil
+	}
 	if h.cmd == nil || h.cmd.Process == nil {
 		return nil
 	}
@@ -41,14 +51,29 @@ func (h procHandle) Wait() error {
 }
 
 func (h procHandle) PID() int {
+	if pid := FindResumePID(h.sessionID); pid > 0 {
+		return pid
+	}
+	if h.grokPID > 0 && processAlive(h.grokPID) {
+		return h.grokPID
+	}
 	if h.cmd == nil || h.cmd.Process == nil {
 		return 0
 	}
 	return h.cmd.Process.Pid
 }
 
+func (h procHandle) WindowID() string { return h.windowID }
+
 func (h procHandle) Close() error {
+	pid := h.PID()
+	if pid > 0 {
+		_ = terminatePID(pid, 2*time.Second)
+	}
 	if h.cmd == nil || h.cmd.Process == nil {
+		return nil
+	}
+	if h.cmd.ProcessState != nil && h.cmd.ProcessState.Exited() {
 		return nil
 	}
 	return h.cmd.Process.Kill()

@@ -6,10 +6,20 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func writeResumeStub(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "grokstub")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 86400\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func TestOpenResumeWaitUntilTabClosed(t *testing.T) {
 	if testing.Short() || os.Getenv("GROK_LIVE") != "1" {
@@ -19,7 +29,7 @@ func TestOpenResumeWaitUntilTabClosed(t *testing.T) {
 	defer cancel()
 	title := SessionTitle("testdetach99")
 	e := Exec{}
-	h, err := e.OpenResume(ctx, "/bin/echo", "testdetach99", "/tmp")
+	h, err := e.OpenResume(ctx, writeResumeStub(t), "testdetach99", "/tmp")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,8 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"grokmcp/internal/protocol"
 	"grokmcp/internal/store"
 	"grokmcp/internal/terminal"
+	"grokmcp/internal/trace"
 )
 
 func newTest(t *testing.T, fake *agent.Fake, term *terminal.Fake) *Service {
@@ -23,11 +26,32 @@ func newTest(t *testing.T, fake *agent.Fake, term *terminal.Fake) *Service {
 	}
 	clk := &clock.Fake{T: time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)}
 	s := New(st, fake, term, clk, &ids.Seq{})
+	tr, err := trace.Open(t.TempDir(), func() time.Time { return clk.Now() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetTrace(tr)
 	t.Cleanup(func() {
 		_ = s.Close()
 		_ = st.Close()
 	})
 	return s
+}
+
+func waitView(t *testing.T, s *Service, id string, want protocol.ViewMode) protocol.Job {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	var j protocol.Job
+	for time.Now().Before(deadline) {
+		var err error
+		j, err = s.Status(context.Background(), id)
+		if err == nil && j.ViewMode == want {
+			return j
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("want view %s got %s owner=%s state=%s", want, j.ViewMode, j.InputOwner, j.State)
+	return j
 }
 
 func waitState(t *testing.T, s *Service, id string, want protocol.JobState) protocol.Job {
@@ -481,7 +505,11 @@ func TestSetViewHeadlessClosesTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.ViewMode != protocol.ViewHeadless || j.State != protocol.StatePlanReady {
+	if j.State != protocol.StatePlanReady {
+		t.Fatalf("%+v", j)
+	}
+	j = waitView(t, s, id, protocol.ViewHeadless)
+	if j.State != protocol.StatePlanReady {
 		t.Fatalf("%+v", j)
 	}
 	if term.HasResume("sess-1") {
@@ -790,3 +818,342 @@ func TestReviseDoesNotRepublishOldPlan(t *testing.T) {
 		t.Fatalf("summary %q", j.PlanSummary)
 	}
 }
+
+func TestDispatchHeadedStillStartsPlan(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, LastAction: "Plan ready", Text: "plan"}
+	}
+	term := terminal.NewFake()
+	s := newTest(t, fake, term)
+	if err := s.SaveSettings(context.Background(), protocol.Settings{DefaultViewMode: string(protocol.ViewHeaded)}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "build runtime"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.Jobs[0].JobID
+	j := waitState(t, s, id, protocol.StatePlanReady)
+	if fake.PromptCount() == 0 {
+		t.Fatal("plan prompt never called")
+	}
+	if j.State == protocol.StatePlanning && j.ViewMode == protocol.ViewHeaded && j.InputOwner == protocol.OwnerTUI && !j.Busy {
+		t.Fatalf("stuck headed without plan: %+v", j)
+	}
+}
+
+func TestPumpTraceContainsSkipReason(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	term := terminal.NewFake()
+	s := newTest(t, fake, term)
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
+		t.Fatal(err)
+	}
+	waitView(t, s, id, protocol.ViewHeaded)
+	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := s.DebugSnapshot(context.Background(), protocol.DebugSnapshotRequest{JobID: id, Limit: 200})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range snap.Events {
+			if ev.Event == "pump.skipped" {
+				reason, _ := ev.Fields["reason"].(string)
+				if reason == "tui_owns" || reason == "stale_tui_owner" {
+					return
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("missing pump.skipped reason")
+}
+
+func TestSetViewHeadlessReturnsWithoutWaitingForClose(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	block := make(chan struct{})
+	fake.LoadBlock["sess-1"] = block
+	term := terminal.NewFake()
+	term.CloseDelay = 2 * time.Second
+	s := newTest(t, fake, term)
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
+		t.Fatal(err)
+	}
+	waitView(t, s, id, protocol.ViewHeaded)
+	start := time.Now()
+	j, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeadless})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("set_view blocked %s", elapsed)
+	}
+	if j.GrokSessionID != "sess-1" || j.State != protocol.StatePlanReady {
+		t.Fatalf("%+v", j)
+	}
+	close(block)
+}
+
+func TestDetachDoesNotCancelTurn(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	term := terminal.NewFake()
+	s := newTest(t, fake, term)
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
+		t.Fatal(err)
+	}
+	waitView(t, s, id, protocol.ViewHeaded)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeadless}); err != nil {
+		t.Fatal(err)
+	}
+	j := waitView(t, s, id, protocol.ViewHeadless)
+	if j.State != protocol.StatePlanReady || j.GrokSessionID != "sess-1" {
+		t.Fatalf("%+v", j)
+	}
+	if len(fake.Cancels) != 0 {
+		t.Fatalf("cancel on detach: %v", fake.Cancels)
+	}
+}
+
+func TestTUIProcessExitReclaimsOwnership(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	term := terminal.NewFake()
+	s := newTest(t, fake, term)
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
+		t.Fatal(err)
+	}
+	waitView(t, s, id, protocol.ViewHeaded)
+	term.ExitProcess("sess-1")
+	j := waitView(t, s, id, protocol.ViewHeadless)
+	if j.InputOwner != protocol.OwnerSupervisor {
+		t.Fatalf("owner %s", j.InputOwner)
+	}
+}
+
+func TestTerminalWindowCanRemainAfterTUIExit(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	term := terminal.NewFake()
+	s := newTest(t, fake, term)
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
+		t.Fatal(err)
+	}
+	waitView(t, s, id, protocol.ViewHeaded)
+	term.ExitProcess("sess-1")
+	waitView(t, s, id, protocol.ViewHeadless)
+	if !term.HasWindow("sess-1") {
+		t.Fatal("window should remain after grok exit")
+	}
+}
+
+func TestDetachLoadSessionFailureIsObservable(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	fake.LoadErr = errLoadBoom
+	term := terminal.NewFake()
+	s := newTest(t, fake, term)
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
+		t.Fatal(err)
+	}
+	waitView(t, s, id, protocol.ViewHeaded)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeadless}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, _ := s.DebugSnapshot(context.Background(), protocol.DebugSnapshotRequest{JobID: id, Limit: 200})
+		for _, ev := range snap.Events {
+			if ev.Event == "session.load.failed" {
+				j, _ := s.Status(context.Background(), id)
+				if j.State == protocol.StateCancelled {
+					t.Fatal("load failure cancelled job")
+				}
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("session.load.failed not observed")
+}
+
+func TestRepeatedDetachIsIdempotent(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	s := newTest(t, fake, terminal.NewFake())
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeadless}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeadless}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.LoadSnapshot()) != 0 {
+		t.Fatalf("headless detach loaded session: %v", fake.LoadSnapshot())
+	}
+}
+
+func TestAttachDetachGenerationRejectsStaleWatcher(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	term := terminal.NewFake()
+	s := newTest(t, fake, term)
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
+		t.Fatal(err)
+	}
+	waitView(t, s, id, protocol.ViewHeaded)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeadless}); err != nil {
+		t.Fatal(err)
+	}
+	term.ExitProcess("sess-1")
+	waitView(t, s, id, protocol.ViewHeadless)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
+		t.Fatal(err)
+	}
+	j := waitView(t, s, id, protocol.ViewHeaded)
+	if j.InputOwner != protocol.OwnerTUI {
+		t.Fatalf("%+v", j)
+	}
+}
+
+func TestWatchdogDetectsStaleTUIOwner(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	s := newTest(t, fake, terminal.NewFake())
+	clk := s.clock.(*clock.Fake)
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	job, _ := s.load(id)
+	job.ViewMode = protocol.ViewHeaded
+	job.InputOwner = protocol.OwnerTUI
+	s.save(job)
+	s.enqueue(id, queued{kind: "continue", text: "x"})
+	time.Sleep(20 * time.Millisecond)
+	s.inspectWatchdog(clk.Now())
+	clk.Advance(4 * time.Second)
+	s.inspectWatchdog(clk.Now())
+	j, _ := s.Status(context.Background(), id)
+	if !j.Stalled || j.StalledReason != "stale_tui_owner" {
+		t.Fatalf("stalled %+v", j)
+	}
+}
+
+func TestDebugSnapshotUsesCursorAndLimit(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	s := newTest(t, fake, terminal.NewFake())
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	snap, err := s.DebugSnapshot(context.Background(), protocol.DebugSnapshotRequest{JobID: id, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Events) != 2 {
+		t.Fatalf("limit %+v", snap)
+	}
+	next, err := s.DebugSnapshot(context.Background(), protocol.DebugSnapshotRequest{JobID: id, Cursor: snap.Cursor, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Events) == 0 {
+		t.Fatal("expected remaining events")
+	}
+	if next.Events[0].Seq <= snap.Cursor {
+		t.Fatalf("cursor overlap %d <= %d", next.Events[0].Seq, snap.Cursor)
+	}
+}
+
+func TestNormalWaitDoesNotContainDebugLogs(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	s := newTest(t, fake, terminal.NewFake())
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	got, err := s.Wait(context.Background(), protocol.WaitRequest{JobIDs: []string{res.Jobs[0].JobID}, TimeoutSec: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(got)
+	if strings.Contains(string(raw), "pump.started") || strings.Contains(string(raw), "acp.prompt.started") {
+		t.Fatalf("wait leaked traces: %s", raw)
+	}
+}
+
+var errLoadBoom = errors.New("load failed")

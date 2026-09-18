@@ -74,7 +74,17 @@ CREATE TABLE IF NOT EXISTS settings (
 			return err
 		}
 	}
+	if _, err := s.db.Exec(`ALTER TABLE jobs ADD COLUMN desired_view_mode TEXT`); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+			return err
+		}
+	}
 	return nil
+}
+
+func (s *Store) Ping() error {
+	return s.db.Ping()
 }
 
 type Record struct {
@@ -87,10 +97,10 @@ func (s *Store) PutJob(rec Record) error {
 	j := rec.Job
 	_, err := s.db.Exec(`
 INSERT INTO jobs (
-  job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, input_owner,
+  job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, desired_view_mode, input_owner,
   plan_digest, plan_summary, last_action, last_summary, user_cancelled, missing_marker_count, recover_fails,
   created_at, updated_at
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(job_id) DO UPDATE SET
   codex_thread_id=excluded.codex_thread_id,
   grok_session_id=excluded.grok_session_id,
@@ -98,6 +108,7 @@ ON CONFLICT(job_id) DO UPDATE SET
   title=excluded.title,
   state=excluded.state,
   view_mode=excluded.view_mode,
+  desired_view_mode=excluded.desired_view_mode,
   input_owner=excluded.input_owner,
   plan_digest=excluded.plan_digest,
   plan_summary=excluded.plan_summary,
@@ -108,20 +119,20 @@ ON CONFLICT(job_id) DO UPDATE SET
   recover_fails=excluded.recover_fails,
   updated_at=excluded.updated_at
 `, j.JobID, j.CodexThreadID, j.GrokSessionID, j.Cwd, j.Title, string(j.State), string(j.ViewMode),
-		string(j.InputOwner), j.PlanDigest, j.PlanSummary, j.LastAction, j.LastSummary, boolToInt(j.UserCancelled),
+		string(desiredView(j)), string(j.InputOwner), j.PlanDigest, j.PlanSummary, j.LastAction, j.LastSummary, boolToInt(j.UserCancelled),
 		rec.MissingMarkerCount, joinInt64(rec.RecoverFails), j.CreatedAt.Unix(), j.UpdatedAt.Unix())
 	return err
 }
 
 func (s *Store) GetJob(id string) (Record, error) {
-	row := s.db.QueryRow(`SELECT job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, input_owner,
+	row := s.db.QueryRow(`SELECT job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, desired_view_mode, input_owner,
 		plan_digest, plan_summary, last_action, last_summary, user_cancelled, missing_marker_count, recover_fails, created_at, updated_at
 		FROM jobs WHERE job_id=?`, id)
 	return scanJob(row)
 }
 
 func (s *Store) ListJobs() ([]Record, error) {
-	rows, err := s.db.Query(`SELECT job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, input_owner,
+	rows, err := s.db.Query(`SELECT job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, desired_view_mode, input_owner,
 		plan_digest, plan_summary, last_action, last_summary, user_cancelled, missing_marker_count, recover_fails, created_at, updated_at
 		FROM jobs ORDER BY updated_at DESC`)
 	if err != nil {
@@ -223,23 +234,42 @@ type rowScanner interface {
 func scanJob(row rowScanner) (Record, error) {
 	var rec Record
 	var state, view, owner string
+	var desired sql.NullString
 	var cancelled, created, updated int64
 	var fails string
 	err := row.Scan(&rec.Job.JobID, &rec.Job.CodexThreadID, &rec.Job.GrokSessionID, &rec.Job.Cwd, &rec.Job.Title,
-		&state, &view, &owner, &rec.Job.PlanDigest, &rec.Job.PlanSummary, &rec.Job.LastAction, &rec.Job.LastSummary,
+		&state, &view, &desired, &owner, &rec.Job.PlanDigest, &rec.Job.PlanSummary, &rec.Job.LastAction, &rec.Job.LastSummary,
 		&cancelled, &rec.MissingMarkerCount, &fails, &created, &updated)
 	if err != nil {
 		return Record{}, err
 	}
 	rec.Job.State = protocol.JobState(state)
 	rec.Job.ViewMode = protocol.ViewMode(view)
+	rec.Job.DesiredViewMode = protocol.ViewMode(desired.String)
 	rec.Job.InputOwner = protocol.InputOwner(owner)
+	if rec.Job.DesiredViewMode == "" {
+		if rec.Job.ViewMode == protocol.ViewHeaded || rec.Job.ViewMode == protocol.ViewAttaching {
+			rec.Job.DesiredViewMode = protocol.ViewHeaded
+		} else {
+			rec.Job.DesiredViewMode = protocol.ViewHeadless
+		}
+	}
 	rec.Job.UserCancelled = cancelled != 0
 	rec.Job.CreatedAt = time.Unix(created, 0).UTC()
 	rec.Job.UpdatedAt = time.Unix(updated, 0).UTC()
 	rec.Job.Project = textutil.ProjectName(rec.Job.Cwd)
 	rec.RecoverFails = splitInt64(fails)
 	return rec, nil
+}
+
+func desiredView(j protocol.Job) protocol.ViewMode {
+	if j.DesiredViewMode != "" {
+		return j.DesiredViewMode
+	}
+	if j.ViewMode == protocol.ViewHeaded || j.ViewMode == protocol.ViewAttaching {
+		return protocol.ViewHeaded
+	}
+	return protocol.ViewHeadless
 }
 
 func boolToInt(v bool) int {

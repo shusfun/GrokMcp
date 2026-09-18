@@ -103,6 +103,20 @@ func (s *Service) TestTerminal(ctx context.Context, template string) error {
 	return s.Backend.TestTerminal(ctx, template)
 }
 
+func (s *Service) DebugSet(ctx context.Context, jobID string, enabled, payloads bool) (protocol.Job, error) {
+	return s.Backend.DebugSet(ctx, protocol.DebugSetRequest{JobID: jobID, Enabled: enabled, Payloads: payloads})
+}
+
+func (s *Service) DebugSnapshot(ctx context.Context, jobID string, cursor int64, limit int, levels, sources []string) (protocol.DebugSnapshot, error) {
+	return s.Backend.DebugSnapshot(ctx, protocol.DebugSnapshotRequest{
+		JobID: jobID, Cursor: cursor, Limit: limit, Levels: levels, Sources: sources,
+	})
+}
+
+func (s *Service) DebugExport(ctx context.Context, jobID string) (protocol.DebugExportResult, error) {
+	return s.Backend.DebugExport(ctx, jobID)
+}
+
 func (s *Service) DetachView(ctx context.Context, jobID string) (protocol.Job, error) {
 	return s.Backend.DetachView(ctx, jobID)
 }

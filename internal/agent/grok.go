@@ -16,6 +16,7 @@ import (
 	"grokmcp/internal/grokbin"
 	"grokmcp/internal/paths"
 	"grokmcp/internal/protocol"
+	"grokmcp/internal/trace"
 )
 
 const exitPlanMethod = "_x.ai/exit_plan_mode"
@@ -44,6 +45,7 @@ type Grok struct {
 	arm     map[string]planChoice
 	attach  string
 	planFn  func(string, string)
+	trace   trace.Sink
 }
 
 func NewGrok(bin string, finder grokbin.Finder) *Grok {
@@ -51,6 +53,22 @@ func NewGrok(bin string, finder grokbin.Finder) *Grok {
 		Bin: bin, Finder: finder, last: map[string]string{}, plan: map[string]bool{},
 		pending: map[string]chan planChoice{}, arm: map[string]planChoice{}, attach: "boundary",
 	}
+}
+
+func (g *Grok) SetTrace(s trace.Sink) { g.trace = s }
+
+func (g *Grok) emitTrace(sessionID, level, name, message string, fields map[string]any) {
+	if g.trace == nil {
+		return
+	}
+	g.trace.Emit(trace.Event{
+		Level:     level,
+		Source:    trace.SourceACP,
+		Name:      name,
+		SessionID: sessionID,
+		Message:   message,
+		Fields:    fields,
+	})
 }
 
 func (g *Grok) AttachMode() string {
@@ -65,6 +83,9 @@ func (g *Grok) AttachMode() string {
 func (g *Grok) Diagnose(ctx context.Context) protocol.DiagnoseResult {
 	d := g.Finder.Diagnose(ctx, g.Bin)
 	d.AttachMode = g.AttachMode()
+	g.mu.Lock()
+	d.ACPOK = g.conn != nil
+	g.mu.Unlock()
 	return d
 }
 
@@ -109,6 +130,9 @@ func (g *Grok) EnsureLeader(ctx context.Context) error {
 			g.plan[sessionID] = true
 		}
 		g.mu.Unlock()
+		if lastAction != "" {
+			g.emitTrace(sessionID, trace.LevelDebug, "acp.session_update", lastAction, map[string]any{"action": lastAction, "plan_ready": planReady})
+		}
 	}
 	client.onPermission = g.handlePermission
 	client.onExitPlan = g.handleExitPlanMode
@@ -127,6 +151,7 @@ func (g *Grok) EnsureLeader(ctx context.Context) error {
 	g.conn = conn
 	g.client = client
 	g.mu.Unlock()
+	g.emitTrace("", trace.LevelInfo, "leader.connected", "ACP leader connected", nil)
 	go func() {
 		_ = cmd.Wait()
 		g.mu.Lock()
@@ -135,6 +160,7 @@ func (g *Grok) EnsureLeader(ctx context.Context) error {
 			g.cmd = nil
 		}
 		g.mu.Unlock()
+		g.emitTrace("", trace.LevelWarn, "leader.disconnected", "ACP leader disconnected", nil)
 	}()
 	g.probeAttach(ctx)
 	g.mu.Lock()
@@ -194,12 +220,18 @@ func (g *Grok) LoadSession(ctx context.Context, sessionID, cwd string) error {
 	g.mu.Lock()
 	conn := g.conn
 	g.mu.Unlock()
+	g.emitTrace(sessionID, trace.LevelInfo, "session.load.started", "load session", nil)
 	_, err := conn.LoadSession(ctx, acp.LoadSessionRequest{
 		SessionId:  acp.SessionId(sessionID),
 		Cwd:        cwd,
 		McpServers: []acp.McpServer{},
 	})
-	return err
+	if err != nil {
+		g.emitTrace(sessionID, trace.LevelError, "session.load.failed", err.Error(), map[string]any{"error": err.Error()})
+		return err
+	}
+	g.emitTrace(sessionID, trace.LevelInfo, "session.load.completed", "load session", nil)
+	return nil
 }
 
 func (g *Grok) Prompt(ctx context.Context, sessionID, text string) (PromptResult, error) {
@@ -286,10 +318,13 @@ func (g *Grok) clearPending(sessionID string) {
 }
 
 func (g *Grok) handlePermission(ctx context.Context, params acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
+	sid := string(params.SessionId)
+	g.emitTrace(sid, trace.LevelInfo, "acp.permission", "permission request", map[string]any{
+		"tool": params.ToolCall.Title,
+	})
 	if !isExitPlanCall(params.ToolCall) {
 		return allowPermission(params), nil
 	}
-	sid := string(params.SessionId)
 	choice, err := g.awaitPlanChoice(ctx, sid, "")
 	if err != nil {
 		return cancelPermission(), err

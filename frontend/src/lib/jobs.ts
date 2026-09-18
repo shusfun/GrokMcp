@@ -26,8 +26,17 @@ export type Job = {
   last_action?: string;
   last_summary?: string;
   plan_summary?: string;
+  desired_view_mode?: ViewMode;
   busy?: boolean;
   user_cancelled?: boolean;
+  debug_enabled?: boolean;
+  debug_cursor?: number;
+  queue_length?: number;
+  active_turn_id?: string;
+  terminal_pid?: number;
+  terminal_window_id?: string;
+  stalled?: boolean;
+  stalled_reason?: string;
   elapsed_seconds: number;
   created_at: string;
   updated_at: string;

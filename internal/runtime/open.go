@@ -21,6 +21,7 @@ import (
 	"grokmcp/internal/store"
 	"grokmcp/internal/supervisor"
 	"grokmcp/internal/terminal"
+	"grokmcp/internal/trace"
 )
 
 type Options struct {
@@ -87,6 +88,11 @@ func openHost(ctx context.Context, opts Options, lock *os.File) (core.Backend, f
 		term = terminal.Exec{Template: stt.TerminalCommandTemplate, Provider: stt.TerminalProvider}
 	}
 	svc := supervisor.New(st, ag, term, clock.Real{}, ids.UUID{})
+	if home, err := paths.AppDir(); err == nil {
+		if tr, err := trace.Open(home, time.Now); err == nil {
+			svc.SetTrace(tr)
+		}
+	}
 	svc.SetGrokPath(func() string {
 		stt, _ := st.Settings()
 		if stt.GrokBinaryPath != "" {

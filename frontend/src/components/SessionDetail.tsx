@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { getClient } from "../api";
 import type { BoundaryEvent } from "../api/client";
 import { DurationText } from "./DurationText";
@@ -9,6 +9,7 @@ import { stageViewLabel, type Job } from "../lib/jobs";
 
 export function SessionDetail({ jobId }: { jobId: string }) {
   const client = getClient();
+  const navigate = useNavigate();
   const [job, setJob] = useState<Job | null>(null);
   const [events, setEvents] = useState<BoundaryEvent[]>([]);
   const [error, setError] = useState("");
@@ -50,6 +51,10 @@ export function SessionDetail({ jobId }: { jobId: string }) {
           onContinue={() => client.continueJob(job.job_id).then(setJob)}
           onOpenDir={() => client.openProject(job.job_id)}
           onPlanDecide={(decide, notes) => client.planDecide(job.job_id, decide, notes).then(setJob)}
+          onDebug={() => client.debugSet(job.job_id, !job.debug_enabled).then(setJob)}
+          onTrace={() => navigate(`/diagnostics?job=${encodeURIComponent(job.job_id)}`)}
+          onExport={() => client.debugExport(job.job_id)}
+          onCopyState={() => void navigator.clipboard.writeText(JSON.stringify(job, null, 2))}
         />
       </div>
       {job.plan_summary ? (

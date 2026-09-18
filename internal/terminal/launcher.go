@@ -5,6 +5,7 @@ import "context"
 type Handle interface {
 	Wait() error
 	PID() int
+	WindowID() string
 	Close() error
 }
 
@@ -18,6 +19,7 @@ type Launcher interface {
 
 type exited struct{}
 
-func (exited) Wait() error  { return nil }
-func (exited) PID() int     { return 0 }
-func (exited) Close() error { return nil }
+func (exited) Wait() error      { return nil }
+func (exited) PID() int         { return 0 }
+func (exited) WindowID() string { return "" }
+func (exited) Close() error     { return nil }

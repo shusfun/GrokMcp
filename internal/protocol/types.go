@@ -63,24 +63,33 @@ const (
 )
 
 type Job struct {
-	JobID          string     `json:"job_id"`
-	CodexThreadID  string     `json:"codex_thread_id,omitempty"`
-	GrokSessionID  string     `json:"grok_session_id,omitempty"`
-	Cwd            string     `json:"cwd"`
-	Project        string     `json:"project"`
-	Title          string     `json:"title"`
-	State          JobState   `json:"state"`
-	ViewMode       ViewMode   `json:"view_mode"`
-	InputOwner     InputOwner `json:"input_owner"`
-	PlanDigest     string     `json:"plan_digest,omitempty"`
-	PlanSummary    string     `json:"plan_summary,omitempty"`
-	LastAction     string     `json:"last_action,omitempty"`
-	LastSummary    string     `json:"last_summary,omitempty"`
-	Busy           bool       `json:"busy"`
-	UserCancelled  bool       `json:"user_cancelled"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	ElapsedSeconds int64      `json:"elapsed_seconds"`
+	JobID            string     `json:"job_id"`
+	CodexThreadID    string     `json:"codex_thread_id,omitempty"`
+	GrokSessionID    string     `json:"grok_session_id,omitempty"`
+	Cwd              string     `json:"cwd"`
+	Project          string     `json:"project"`
+	Title            string     `json:"title"`
+	State            JobState   `json:"state"`
+	ViewMode         ViewMode   `json:"view_mode"`
+	DesiredViewMode  ViewMode   `json:"desired_view_mode,omitempty"`
+	InputOwner       InputOwner `json:"input_owner"`
+	PlanDigest       string     `json:"plan_digest,omitempty"`
+	PlanSummary      string     `json:"plan_summary,omitempty"`
+	LastAction       string     `json:"last_action,omitempty"`
+	LastSummary      string     `json:"last_summary,omitempty"`
+	Busy             bool       `json:"busy"`
+	UserCancelled    bool       `json:"user_cancelled"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	ElapsedSeconds   int64      `json:"elapsed_seconds"`
+	DebugEnabled     bool       `json:"debug_enabled,omitempty"`
+	DebugCursor      int64      `json:"debug_cursor,omitempty"`
+	QueueLength      int        `json:"queue_length,omitempty"`
+	ActiveTurnID     string     `json:"active_turn_id,omitempty"`
+	TerminalPID      int        `json:"terminal_pid,omitempty"`
+	TerminalWindowID string     `json:"terminal_window_id,omitempty"`
+	Stalled          bool       `json:"stalled,omitempty"`
+	StalledReason    string     `json:"stalled_reason,omitempty"`
 }
 
 type BoundaryEvent struct {
@@ -154,6 +163,55 @@ type OpenTerminalRequest struct {
 	Dashboard bool   `json:"dashboard,omitempty"`
 }
 
+type DebugSetRequest struct {
+	JobID    string `json:"job_id" jsonschema:"job id"`
+	Enabled  bool   `json:"enabled"`
+	Payloads bool   `json:"payloads,omitempty"`
+}
+
+type DebugSnapshotRequest struct {
+	JobID   string   `json:"job_id" jsonschema:"job id"`
+	Cursor  int64    `json:"cursor,omitempty"`
+	Limit   int      `json:"limit,omitempty"`
+	Levels  []string `json:"levels,omitempty"`
+	Sources []string `json:"sources,omitempty"`
+}
+
+type DebugWaitRequest struct {
+	JobID      string `json:"job_id" jsonschema:"job id"`
+	Cursor     int64  `json:"cursor"`
+	Until      string `json:"until,omitempty"`
+	TimeoutSec int    `json:"timeout_sec,omitempty"`
+}
+
+type TraceEvent struct {
+	Seq         int64          `json:"seq"`
+	Time        time.Time      `json:"time"`
+	Level       string         `json:"level"`
+	Source      string         `json:"source"`
+	Event       string         `json:"event"`
+	JobID       string         `json:"job_id,omitempty"`
+	SessionID   string         `json:"session_id,omitempty"`
+	TurnID      string         `json:"turn_id,omitempty"`
+	State       string         `json:"state,omitempty"`
+	ViewMode    string         `json:"view_mode,omitempty"`
+	InputOwner  string         `json:"input_owner,omitempty"`
+	Busy        *bool          `json:"busy,omitempty"`
+	QueueLength *int           `json:"queue_length,omitempty"`
+	Message     string         `json:"message,omitempty"`
+	Fields      map[string]any `json:"fields,omitempty"`
+}
+
+type DebugSnapshot struct {
+	JobID  string       `json:"job_id"`
+	Cursor int64        `json:"cursor"`
+	Events []TraceEvent `json:"events"`
+}
+
+type DebugExportResult struct {
+	Path string `json:"path"`
+}
+
 type DiagnoseResult struct {
 	GrokPath      string `json:"grok_path"`
 	GrokVersion   string `json:"grok_version"`
@@ -162,6 +220,7 @@ type DiagnoseResult struct {
 	LeaderSocket  string `json:"leader_socket"`
 	Compatible    bool   `json:"compatible"`
 	AttachMode    string `json:"attach_mode"`
+	ACPOK         bool   `json:"acp_ok"`
 	Error         string `json:"error,omitempty"`
 }
 
@@ -173,7 +232,11 @@ type InstallResult struct {
 
 type StatusBar struct {
 	LeaderOK     bool `json:"leader_ok"`
+	ACPOK        bool `json:"acp_ok"`
 	MCPOK        bool `json:"mcp_ok"`
+	DBOK         bool `json:"db_ok"`
+	DebugEnabled bool `json:"debug_enabled"`
+	Stalled      bool `json:"stalled"`
 	Working      int  `json:"working"`
 	NeedsInput   int  `json:"needs_input"`
 	Disconnected int  `json:"disconnected"`

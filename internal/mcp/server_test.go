@@ -48,8 +48,20 @@ func (stub) Events(context.Context, string) ([]protocol.BoundaryEvent, error) {
 	return nil, nil
 }
 func (stub) TestTerminal(context.Context, string) error { return nil }
-func (stub) Subscribe(func(protocol.Event)) func()      { return func() {} }
-func (stub) Close() error                               { return nil }
+func (stub) DebugSet(context.Context, protocol.DebugSetRequest) (protocol.Job, error) {
+	return protocol.Job{}, nil
+}
+func (stub) DebugSnapshot(context.Context, protocol.DebugSnapshotRequest) (protocol.DebugSnapshot, error) {
+	return protocol.DebugSnapshot{}, nil
+}
+func (stub) DebugWait(context.Context, protocol.DebugWaitRequest) (protocol.DebugSnapshot, error) {
+	return protocol.DebugSnapshot{}, nil
+}
+func (stub) DebugExport(context.Context, string) (protocol.DebugExportResult, error) {
+	return protocol.DebugExportResult{}, nil
+}
+func (stub) Subscribe(func(protocol.Event)) func() { return func() {} }
+func (stub) Close() error                          { return nil }
 
 type recorder struct {
 	stub
@@ -178,14 +190,18 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string][]string{
-		"grok_dispatch":      {"tasks"},
-		"grok_wait":          {"job_ids"},
-		"grok_plan_decide":   {"job_id", "decide"},
-		"grok_followup":      {"job_id", "prompt"},
-		"grok_cancel_turn":   {"job_id"},
-		"grok_set_view":      {"job_id", "view"},
-		"grok_status":        nil,
-		"grok_open_terminal": nil,
+		"grok_dispatch":       {"tasks"},
+		"grok_wait":           {"job_ids"},
+		"grok_plan_decide":    {"job_id", "decide"},
+		"grok_followup":       {"job_id", "prompt"},
+		"grok_cancel_turn":    {"job_id"},
+		"grok_set_view":       {"job_id", "view"},
+		"grok_status":         nil,
+		"grok_open_terminal":  nil,
+		"grok_debug_set":      {"job_id", "enabled"},
+		"grok_debug_snapshot": {"job_id"},
+		"grok_debug_wait":     {"job_id", "cursor"},
+		"grok_debug_export":   {"job_id"},
 	}
 	got := map[string][]string{}
 	for _, tool := range listed.Tools {

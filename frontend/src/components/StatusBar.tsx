@@ -17,7 +17,10 @@ export function StatusBar({ bar }: { bar: StatusBarData }) {
     <footer className="flex h-7 shrink-0 items-center justify-between border-t border-[var(--line)] bg-[var(--head)] px-3 text-[11px] text-[var(--muted)]">
       <Link to="/diagnostics" className="flex items-center gap-3 hover:text-[var(--ink)]">
         <span className="flex items-center gap-1.5"><Dot ok={bar.leader_ok} /> Leader</span>
+        <span className="flex items-center gap-1.5"><Dot ok={bar.acp_ok ?? bar.leader_ok} /> ACP</span>
         <span className="flex items-center gap-1.5"><Dot ok={bar.mcp_ok} /> MCP</span>
+        <span className="flex items-center gap-1.5"><Dot ok={bar.db_ok !== false} /> DB</span>
+        {bar.stalled ? <span className="text-[var(--fail)]">stalled</span> : null}
       </Link>
       <span className="tabular-nums">{version}</span>
     </footer>

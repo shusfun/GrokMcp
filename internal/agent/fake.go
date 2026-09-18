@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"grokmcp/internal/protocol"
 )
@@ -30,20 +31,25 @@ type Fake struct {
 	Mode                 string
 	Diag                 protocol.DiagnoseResult
 	PromptBlock          map[string]chan struct{}
+	LoadBlock            map[string]chan struct{}
+	LoadDelay            time.Duration
 	PlanReadyBeforeBlock string
 	planWait             map[string]chan bool
 	planFn               func(string, string)
+	acpOK                bool
 }
 
 func NewFake() *Fake {
 	return &Fake{
 		Sessions:    map[string]string{},
 		PromptBlock: map[string]chan struct{}{},
+		LoadBlock:   map[string]chan struct{}{},
 		planWait:    map[string]chan bool{},
 		Mode:        "live",
+		acpOK:       true,
 		Diag: protocol.DiagnoseResult{
 			GrokPath: "/usr/bin/grok", GrokVersion: "1.0.34", LoggedIn: true,
-			Compatible: true, AttachMode: "live",
+			Compatible: true, AttachMode: "live", ACPOK: true,
 		},
 	}
 }
@@ -53,6 +59,7 @@ func (f *Fake) Diagnose(context.Context) protocol.DiagnoseResult {
 	defer f.mu.Unlock()
 	d := f.Diag
 	d.AttachMode = f.Mode
+	d.ACPOK = f.acpOK
 	return d
 }
 
@@ -85,12 +92,31 @@ func (f *Fake) NewSession(_ context.Context, cwd string, worktree bool) (string,
 	return id, cwd, nil
 }
 
-func (f *Fake) LoadSession(_ context.Context, sessionID, cwd string) error {
+func (f *Fake) LoadSession(ctx context.Context, sessionID, cwd string) error {
+	f.mu.Lock()
+	delay := f.LoadDelay
+	block := f.LoadBlock[sessionID]
+	err := f.LoadErr
+	f.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	if block != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-block:
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Loads = append(f.Loads, sessionID+"|"+cwd)
-	if f.LoadErr != nil {
-		return f.LoadErr
+	if err != nil {
+		return err
 	}
 	f.Sessions[sessionID] = cwd
 	return nil

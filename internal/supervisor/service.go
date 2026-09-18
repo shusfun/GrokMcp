@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"grokmcp/internal/agent"
 	"grokmcp/internal/clock"
@@ -14,6 +15,7 @@ import (
 	"grokmcp/internal/store"
 	"grokmcp/internal/terminal"
 	"grokmcp/internal/textutil"
+	"grokmcp/internal/trace"
 )
 
 var errNotFound = errors.New("job not found")
@@ -23,16 +25,22 @@ type queued struct {
 	text   string
 	repair bool
 	gen    uint64
+	turnID string
 }
 
 type runtime struct {
-	busy      bool
-	queue     []queued
-	cancel    context.CancelFunc
-	promptCh  chan struct{}
-	term      terminal.Handle
-	attachGen uint64
-	gen       uint64
+	busy          bool
+	queue         []queued
+	cancel        context.CancelFunc
+	promptCh      chan struct{}
+	term          terminal.Handle
+	attachGen     uint64
+	gen           uint64
+	turnSeq       uint64
+	turnID        string
+	stalled       bool
+	stalledReason string
+	stallSince    map[string]time.Time
 }
 
 type Service struct {
@@ -42,15 +50,17 @@ type Service struct {
 	clock    clock.Clock
 	ids      ids.Generator
 	grokPath func() string
+	traces   *trace.Log
 
-	mu       sync.Mutex
-	rt       map[string]*runtime
-	subs     map[int]func(protocol.Event)
-	subSeq   int
-	mcpN     int
-	closed   bool
-	pumps    sync.WaitGroup
-	watchers sync.WaitGroup
+	mu        sync.Mutex
+	rt        map[string]*runtime
+	subs      map[int]func(protocol.Event)
+	subSeq    int
+	mcpN      int
+	closed    bool
+	stopWatch chan struct{}
+	pumps     sync.WaitGroup
+	watchers  sync.WaitGroup
 }
 
 func New(st *store.Store, ag agent.Agent, term terminal.Launcher, clk clock.Clock, idg ids.Generator) *Service {
@@ -63,7 +73,7 @@ func New(st *store.Store, ag agent.Agent, term terminal.Launcher, clk clock.Cloc
 	s := &Service{
 		store: st, agent: ag, term: term, clock: clk, ids: idg,
 		rt: map[string]*runtime{}, subs: map[int]func(protocol.Event){},
-		grokPath: func() string { return "grok" },
+		grokPath: func() string { return "grok" }, stopWatch: make(chan struct{}),
 	}
 	if ag != nil {
 		ag.SetPlanListener(func(sessionID, excerpt string) { s.onPlanReady(sessionID, excerpt) })
@@ -71,7 +81,46 @@ func New(st *store.Store, ag agent.Agent, term terminal.Launcher, clk clock.Cloc
 	return s
 }
 
+func (s *Service) bindAgentTrace() {
+	type tracer interface {
+		SetTrace(trace.Sink)
+	}
+	if t, ok := s.agent.(tracer); ok {
+		t.SetTrace(acpSink{s: s})
+	}
+}
+
+type acpSink struct{ s *Service }
+
+func (a acpSink) Emit(ev trace.Event) {
+	if a.s == nil || a.s.traces == nil {
+		return
+	}
+	if ev.JobID == "" && ev.SessionID != "" {
+		ev.JobID = a.s.jobIDForSession(ev.SessionID)
+	}
+	a.s.traces.Emit(ev)
+}
+
+func (s *Service) jobIDForSession(sessionID string) string {
+	recs, err := s.store.ListJobs()
+	if err != nil {
+		return ""
+	}
+	for _, rec := range recs {
+		if rec.Job.GrokSessionID == sessionID {
+			return rec.Job.JobID
+		}
+	}
+	return ""
+}
+
 func (s *Service) SetGrokPath(fn func() string) { s.grokPath = fn }
+
+func (s *Service) SetTrace(l *trace.Log) {
+	s.traces = l
+	s.bindAgentTrace()
+}
 
 func (s *Service) SetMCPConnected(v bool) {
 	s.mu.Lock()
@@ -97,12 +146,20 @@ func (s *Service) Start(ctx context.Context) error {
 			s.goWatch(func() { s.recoverJob(ctx, id) })
 		}
 	}
+	s.goWatch(s.watchLoop)
 	return nil
 }
 
 func (s *Service) Close() error {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		s.pumps.Wait()
+		s.watchers.Wait()
+		return nil
+	}
 	s.closed = true
+	close(s.stopWatch)
 	var handles []terminal.Handle
 	for _, rt := range s.rt {
 		if rt.cancel != nil {
@@ -163,7 +220,7 @@ func (s *Service) Dispatch(ctx context.Context, req protocol.DispatchRequest) (p
 		job := protocol.Job{
 			JobID: s.ids.JobID(), CodexThreadID: task.CodexThreadID, Cwd: cwd,
 			Project: textutil.ProjectName(cwd), Title: title, State: protocol.StateCreated,
-			ViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor,
+			ViewMode: protocol.ViewHeadless, DesiredViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor,
 			CreatedAt: now, UpdatedAt: now,
 		}
 		if err := s.put(job, 0, nil); err != nil {
@@ -189,13 +246,16 @@ func (s *Service) startJob(ctx context.Context, job protocol.Job, task protocol.
 	}
 	job.State = protocol.StatePlanning
 	job.LastAction = "Planning"
-	s.touch(&job)
-	_ = s.put(job, 0, nil)
-	s.enqueue(job.JobID, queued{kind: "plan", text: protocol.TaskContract(job.Cwd, job.Title, task.Prompt)})
 	st, _ := s.store.Settings()
 	if st.DefaultViewMode == string(protocol.ViewHeaded) {
-		job, _ = s.attach(ctx, job)
+		job.DesiredViewMode = protocol.ViewHeaded
+	} else {
+		job.DesiredViewMode = protocol.ViewHeadless
 	}
+	s.touch(&job)
+	_ = s.put(job, 0, nil)
+	s.emitTrace(job, "info", trace.SourceSupervisor, "job.created", "job started", nil)
+	s.enqueue(job.JobID, queued{kind: "plan", text: protocol.TaskContract(job.Cwd, job.Title, task.Prompt)})
 	return s.snapshot(job.JobID)
 }
 
@@ -205,17 +265,8 @@ func (s *Service) ListJobs(context.Context) ([]protocol.Job, error) {
 		return nil, err
 	}
 	out := make([]protocol.Job, 0, len(recs))
-	now := s.clock.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, rec := range recs {
-		j := rec.Job
-		if rt := s.rt[j.JobID]; rt != nil {
-			j.Busy = rt.busy
-		}
-		j.Project = textutil.ProjectName(j.Cwd)
-		j.ElapsedSeconds = textutil.ElapsedSeconds(j.CreatedAt, now)
-		out = append(out, j)
+		out = append(out, s.decorate(rec.Job))
 	}
 	return out, nil
 }
@@ -240,10 +291,17 @@ func (s *Service) StatusBar(ctx context.Context) (protocol.StatusBar, error) {
 	s.mu.Lock()
 	mcpOK := s.mcpN > 0
 	s.mu.Unlock()
-	bar := protocol.StatusBar{MCPOK: mcpOK}
+	bar := protocol.StatusBar{MCPOK: mcpOK, DBOK: s.store.Ping() == nil}
 	diag := s.agent.Diagnose(ctx)
 	bar.LeaderOK = diag.LeaderRunning
+	bar.ACPOK = diag.ACPOK || diag.LeaderRunning
 	for _, j := range jobs {
+		if j.DebugEnabled {
+			bar.DebugEnabled = true
+		}
+		if j.Stalled {
+			bar.Stalled = true
+		}
 		switch j.State {
 		case protocol.StatePlanning, protocol.StateExecuting, protocol.StateStarting, protocol.StateRecovering:
 			bar.Working++
@@ -329,11 +387,37 @@ func (s *Service) decorate(job protocol.Job) protocol.Job {
 	s.mu.Lock()
 	rt := s.rt[job.JobID]
 	busy := false
+	qlen := 0
+	turnID := ""
+	stalled := false
+	reason := ""
+	var term terminal.Handle
 	if rt != nil {
 		busy = rt.busy
+		qlen = len(rt.queue)
+		turnID = rt.turnID
+		stalled = rt.stalled
+		reason = rt.stalledReason
+		term = rt.term
 	}
 	s.mu.Unlock()
 	job.Busy = busy
+	job.QueueLength = qlen
+	job.ActiveTurnID = turnID
+	job.Stalled = stalled
+	job.StalledReason = reason
+	if job.DesiredViewMode == "" {
+		job.DesiredViewMode = protocol.ViewHeadless
+	}
+	if term != nil {
+		job.TerminalPID = term.PID()
+		job.TerminalWindowID = term.WindowID()
+	}
+	if s.traces != nil {
+		dbg := s.traces.Debug(job.JobID)
+		job.DebugEnabled = dbg.Enabled
+		job.DebugCursor = s.traces.Cursor(job.JobID)
+	}
 	job.Project = textutil.ProjectName(job.Cwd)
 	job.ElapsedSeconds = textutil.ElapsedSeconds(job.CreatedAt, s.clock.Now())
 	return job
@@ -376,8 +460,43 @@ func (s *Service) runtime(id string) *runtime {
 	defer s.mu.Unlock()
 	rt := s.rt[id]
 	if rt == nil {
-		rt = &runtime{}
+		rt = &runtime{stallSince: map[string]time.Time{}}
 		s.rt[id] = rt
 	}
 	return rt
+}
+
+func (s *Service) emitTrace(job protocol.Job, level, source, name, message string, fields map[string]any) {
+	if s.traces == nil {
+		return
+	}
+	ev := trace.Event{
+		Level:      level,
+		Source:     source,
+		Name:       name,
+		JobID:      job.JobID,
+		SessionID:  job.GrokSessionID,
+		State:      string(job.State),
+		ViewMode:   string(job.ViewMode),
+		InputOwner: string(job.InputOwner),
+		Busy:       trace.Bool(job.Busy),
+		Message:    message,
+		Fields:     fields,
+		Time:       s.clock.Now(),
+	}
+	s.mu.Lock()
+	if rt := s.rt[job.JobID]; rt != nil {
+		ev.Busy = trace.Bool(rt.busy)
+		ev.QueueLength = trace.Int(len(rt.queue))
+		ev.TurnID = rt.turnID
+	}
+	s.mu.Unlock()
+	s.traces.Emit(ev)
+}
+
+func (s *Service) debugPayloads(jobID string) bool {
+	if s.traces == nil {
+		return false
+	}
+	return s.traces.Debug(jobID).Payloads
 }

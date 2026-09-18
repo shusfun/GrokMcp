@@ -13,6 +13,7 @@ import (
 	"grokmcp/internal/core"
 	"grokmcp/internal/notify"
 	"grokmcp/internal/protocol"
+	"grokmcp/internal/trace"
 	"grokmcp/internal/version"
 	"grokmcp/internal/web"
 )
@@ -98,6 +99,13 @@ func Run(backend core.Backend) error {
 		host.onJob(ev.Job)
 		host.refresh()
 	})
+	if ts, ok := backend.(interface {
+		TraceSubscribe(func(trace.Event)) func()
+	}); ok {
+		ts.TraceSubscribe(func(ev trace.Event) {
+			app.Event.Emit("debug:trace", ev)
+		})
+	}
 
 	return app.Run()
 }
