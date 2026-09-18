@@ -901,7 +901,7 @@ func TestSetViewHeadlessReturnsWithoutWaitingForClose(t *testing.T) {
 	block := make(chan struct{})
 	fake.LoadBlock["sess-1"] = block
 	term := terminal.NewFake()
-	term.CloseDelay = 2 * time.Second
+	term.CloseDelay = 200 * time.Millisecond
 	s := newTest(t, fake, term)
 	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
 		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},

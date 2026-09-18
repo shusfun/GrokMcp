@@ -142,23 +142,16 @@ type waitHandle struct {
 }
 
 func (h waitHandle) Wait() error {
-	for {
-		h.fake.mu.Lock()
-		st := h.fake.Handles[h.id]
-		var ch chan struct{}
-		if st != nil {
-			ch = st.wait
-			if !st.process || !st.window {
-				h.fake.mu.Unlock()
-				return nil
-			}
-		}
+	h.fake.mu.Lock()
+	st := h.fake.Handles[h.id]
+	if st == nil || st.closed || !st.process || !st.window {
 		h.fake.mu.Unlock()
-		if st == nil {
-			return nil
-		}
-		<-ch
+		return nil
 	}
+	ch := st.wait
+	h.fake.mu.Unlock()
+	<-ch
+	return nil
 }
 
 func (h waitHandle) PID() int {

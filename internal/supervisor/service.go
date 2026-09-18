@@ -34,6 +34,7 @@ type runtime struct {
 	cancel        context.CancelFunc
 	promptCh      chan struct{}
 	term          terminal.Handle
+	waitCancel    context.CancelFunc
 	attachGen     uint64
 	gen           uint64
 	turnSeq       uint64
@@ -164,6 +165,10 @@ func (s *Service) Close() error {
 	for _, rt := range s.rt {
 		if rt.cancel != nil {
 			rt.cancel()
+		}
+		if rt.waitCancel != nil {
+			rt.waitCancel()
+			rt.waitCancel = nil
 		}
 		if rt.term != nil {
 			handles = append(handles, rt.term)

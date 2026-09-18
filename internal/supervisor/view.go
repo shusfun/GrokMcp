@@ -148,7 +148,9 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (protocol.Job
 		_ = h.Close()
 		return s.decorate(job), errors.New("supervisor closed")
 	}
+	waitCtx, waitCancel := context.WithCancel(context.Background())
 	rt.term = h
+	rt.waitCancel = waitCancel
 	rt.attachGen++
 	gen := rt.attachGen
 	s.mu.Unlock()
@@ -157,7 +159,15 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (protocol.Job
 	}
 	job = s.markHeaded(job)
 	s.goWatch(func() {
-		_ = h.Wait()
+		done := make(chan struct{})
+		go func() {
+			_ = h.Wait()
+			close(done)
+		}()
+		select {
+		case <-waitCtx.Done():
+		case <-done:
+		}
 		s.mu.Lock()
 		rt := s.rt[job.JobID]
 		if rt == nil || rt.term != h || rt.attachGen != gen {
@@ -166,6 +176,9 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (protocol.Job
 			return
 		}
 		rt.term = nil
+		if rt.waitCancel != nil {
+			rt.waitCancel = nil
+		}
 		s.mu.Unlock()
 		s.emitTrace(job, "info", trace.SourceTerminal, "terminal.process_exited", "grok process exited", map[string]any{"window_id": h.WindowID()})
 		loaded, err := s.load(job.JobID)
@@ -213,6 +226,10 @@ func (s *Service) detach(_ context.Context, job protocol.Job, fromClose bool) (p
 	rt := s.runtime(job.JobID)
 	s.mu.Lock()
 	h := rt.term
+	if rt.waitCancel != nil {
+		rt.waitCancel()
+		rt.waitCancel = nil
+	}
 	if !fromClose {
 		rt.attachGen++
 		rt.term = nil
