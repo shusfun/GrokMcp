@@ -1,12 +1,13 @@
-import { LayoutDashboard, Moon, Monitor, Settings, Sun } from "lucide-react";
+import { useState } from "react";
+import { LayoutDashboard, Moon, Settings, Sun } from "lucide-react";
 import { Link, useLocation } from "react-router";
 import { getClient } from "../api";
 import { hideWindow, hostOS, isWails, minimiseWindow, toggleMaximiseWindow } from "../api/wails";
 import { cn } from "../lib/cn";
-import type { Appearance } from "../lib/theme";
+import { toggleResolved } from "../lib/theme";
 import { useTheme } from "./ThemeProvider";
 import { Button } from "./ui/button";
-import { DropdownItem, DropdownMenu } from "./ui/dropdown-menu";
+import { Dialog } from "./ui/dialog";
 
 function WindowButtons() {
   const noDrag = { ["--wails-draggable" as string]: "no-drag" };
@@ -19,32 +20,20 @@ function WindowButtons() {
   );
 }
 
-const APPEARANCE_ITEMS: { value: Appearance; label: string; icon: typeof Sun }[] = [
-  { value: "system", label: "跟随系统", icon: Monitor },
-  { value: "light", label: "浅色", icon: Sun },
-  { value: "dark", label: "深色", icon: Moon },
-];
-
 function ThemeToggle() {
-  const { appearance, resolved, setAppearance } = useTheme();
+  const { resolved, setAppearance } = useTheme();
   const Icon = resolved === "dark" ? Moon : Sun;
+  const next = resolved === "dark" ? "浅色" : "深色";
   return (
-    <DropdownMenu
-      trigger={(
-        <Button size="icon" variant="ghost" aria-label="外观" title="外观">
-          <Icon className="h-3.5 w-3.5" />
-        </Button>
-      )}
+    <Button
+      size="icon"
+      variant="ghost"
+      aria-label={`切换${next}`}
+      title={`切换${next}`}
+      onClick={() => setAppearance(toggleResolved(resolved))}
     >
-      {APPEARANCE_ITEMS.map((item) => (
-        <DropdownItem key={item.value} onClick={() => setAppearance(item.value)}>
-          <span className={cn("flex items-center gap-2", appearance === item.value && "text-[var(--accent)]")}>
-            <item.icon className="h-3.5 w-3.5" />
-            {item.label}
-          </span>
-        </DropdownItem>
-      ))}
-    </DropdownMenu>
+      <Icon className="h-3.5 w-3.5" />
+    </Button>
   );
 }
 
@@ -55,6 +44,7 @@ export function TitleBar() {
   const noDrag = { ["--wails-draggable" as string]: "no-drag" };
   const path = useLocation().pathname;
   const settingsOn = path.startsWith("/settings") || path.startsWith("/diagnostics");
+  const [dashError, setDashError] = useState("");
   return (
     <header
       className={`flex h-11 shrink-0 select-none items-center justify-between border-b border-[var(--line)] bg-[var(--head)] pr-2 text-sm ${mac ? "pl-[78px]" : "pl-3"}`}
@@ -65,7 +55,9 @@ export function TitleBar() {
         <Button
           size="sm"
           variant="ghost"
-          onClick={() => void getClient().openTerminal("", true)}
+          onClick={() => {
+            void getClient().openTerminal("", true).catch((e: Error) => setDashError(e.message || "无法打开 Dashboard"));
+          }}
         >
           <LayoutDashboard className="h-3.5 w-3.5" />
           Dashboard
@@ -83,6 +75,9 @@ export function TitleBar() {
         </Link>
         {windows ? <WindowButtons /> : null}
       </span>
+      <Dialog open={Boolean(dashError)} title="无法打开 Dashboard" onOpenChange={(open) => { if (!open) setDashError(""); }}>
+        {dashError}
+      </Dialog>
     </header>
   );
 }

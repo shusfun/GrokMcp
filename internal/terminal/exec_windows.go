@@ -23,7 +23,7 @@ func (e Exec) spawn(_ context.Context, cwd, command, sessionID string) (Handle, 
 		}
 		return procHandle{cmd: cmd}, nil
 	}
-	inner := "title " + title + " && cd /d " + cwd + " && " + command
+	inner := "title " + title + " && " + CommandInDirWindows(cwd, command)
 	cmd := exec.Command("cmd", "/k", inner)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00000010} // CREATE_NEW_CONSOLE
 	if err := cmd.Start(); err != nil {

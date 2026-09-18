@@ -34,6 +34,10 @@ export function resolveTheme(appearance: Appearance): "light" | "dark" {
   return systemPrefersDark() ? "dark" : "light";
 }
 
+export function toggleResolved(resolved: "light" | "dark"): Appearance {
+  return resolved === "dark" ? "light" : "dark";
+}
+
 export function applyAppearance(appearance: Appearance) {
   document.documentElement.dataset.theme = resolveTheme(appearance);
 }

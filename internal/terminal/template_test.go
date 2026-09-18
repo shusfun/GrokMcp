@@ -27,3 +27,19 @@ func TestRender(t *testing.T) {
 		t.Fatal(cmd)
 	}
 }
+
+func TestCommandInDirSkipsEmptyCwd(t *testing.T) {
+	cmd := DashboardCommand("/bin/grok")
+	if got := CommandInDir("", cmd); got != cmd {
+		t.Fatal(got)
+	}
+	if got := CommandInDirWindows("", cmd); got != cmd {
+		t.Fatal(got)
+	}
+	if got := CommandInDir("/tmp/p", cmd); got != "cd '/tmp/p' && "+cmd {
+		t.Fatal(got)
+	}
+	if got := CommandInDirWindows(`C:\work`, cmd); got != `cd /d C:\work && `+cmd {
+		t.Fatal(got)
+	}
+}

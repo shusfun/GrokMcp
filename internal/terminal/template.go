@@ -26,6 +26,26 @@ func DashboardCommand(grokPath string) string {
 	return fmt.Sprintf("%s dashboard", shellQuote(grokPath))
 }
 
+func CommandInDir(cwd, command string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return command
+	}
+	return "cd " + shellSingleQuote(cwd) + " && " + command
+}
+
+func CommandInDirWindows(cwd, command string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return command
+	}
+	return "cd /d " + cwd + " && " + command
+}
+
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, `'`, `'"'"'`) + "'"
+}
+
 func shellQuote(s string) string {
 	if s == "" {
 		return "grok"

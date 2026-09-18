@@ -28,7 +28,7 @@ func (e Exec) spawn(_ context.Context, cwd, command, sessionID string) (Handle, 
 		return procHandle{cmd: cmd}, nil
 	}
 	title := SessionTitle(sessionID)
-	inner := fmt.Sprintf(`cd %s && %s`, shSingle(cwd), command)
+	inner := CommandInDir(cwd, command)
 	script := fmt.Sprintf(`tell application "Terminal"
   set t to do script %s
   try
@@ -257,6 +257,4 @@ func appleQuote(s string) string {
 	return `"` + s + `"`
 }
 
-func shSingle(s string) string {
-	return `'` + strings.ReplaceAll(s, `'`, `'"'"'`) + `'`
-}
+
