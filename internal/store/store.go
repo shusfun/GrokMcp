@@ -155,7 +155,7 @@ func (s *Store) Events(jobID string, limit int) ([]protocol.BoundaryEvent, error
 		return nil, err
 	}
 	defer rows.Close()
-	var out []protocol.BoundaryEvent
+	out := make([]protocol.BoundaryEvent, 0)
 	for rows.Next() {
 		var e protocol.BoundaryEvent
 		var ts int64

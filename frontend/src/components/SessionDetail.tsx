@@ -18,7 +18,7 @@ export function SessionDetail({ jobId }: { jobId: string }) {
       Promise.all([client.status(jobId), client.events(jobId)])
         .then(([j, ev]) => {
           setJob(j);
-          setEvents(ev);
+          setEvents(ev ?? []);
           setError("");
         })
         .catch((e: Error) => setError(e.message));
@@ -58,7 +58,7 @@ export function SessionDetail({ jobId }: { jobId: string }) {
       <section className="mt-5">
         <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">边界事件</h2>
         <ul>
-          {events.map((ev) => (
+          {(events ?? []).map((ev) => (
             <li key={ev.id} className="flex gap-3 border-l-2 border-[var(--line)] py-2 pl-3 text-sm">
               <span className="w-28 shrink-0 text-xs text-[var(--muted)]">{ev.event_type}</span>
               <span>{ev.summary}</span>

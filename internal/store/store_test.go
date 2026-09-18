@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -39,5 +40,27 @@ func TestPutGetList(t *testing.T) {
 	ev, err := s.Events("j1", 5)
 	if err != nil || len(ev) != 1 || ev[0].Summary != "Plan ready" {
 		t.Fatalf("events %+v %v", ev, err)
+	}
+}
+
+func TestEventsEmptyJSONArray(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ev, err := s.Events("missing", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev == nil {
+		t.Fatal("Events returned nil slice")
+	}
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "[]" {
+		t.Fatalf("Events JSON = %s, want []", raw)
 	}
 }
