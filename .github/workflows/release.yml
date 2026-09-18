@@ -82,8 +82,10 @@ jobs:
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: artifacts
         run: |
-          gh release create "$GITHUB_REF_NAME" artifacts/* \
+          sha256sum GrokMcp-* | sort > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" GrokMcp-* SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" \
             --generate-notes \
             --title "$GITHUB_REF_NAME"

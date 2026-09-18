@@ -79,6 +79,9 @@ build_darwin() {
 	mkdir -p "$stage"
 	cp -R "$appdir" "$stage/"
 	ln -s /Applications "$stage/Applications"
+	cp "build/darwin/打开说明.txt" "$stage/"
+	cp "build/darwin/清除隔离属性.command" "$stage/"
+	chmod 755 "$stage/清除隔离属性.command"
 
 	dmg="$DIST_DIR/${BIN_NAME}-${VERSION}-darwin-${arch}.dmg"
 	rm -f "$dmg"

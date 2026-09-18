@@ -12,7 +12,13 @@ Download the asset for your machine from [Releases](https://github.com/shusfun/G
 | `GrokMcp-*-darwin-arm64.dmg` | macOS Apple Silicon |
 | `GrokMcp-*-windows-amd64.zip` | Windows x64 |
 
-macOS builds are ad-hoc signed and not notarized. Gatekeeper may block the first open: right-click the app, choose Open, and confirm.
+macOS builds are ad-hoc signed and not notarized (no Apple Developer ID). Gatekeeper will warn on the first open after a download. Drag the app to Applications, then use **System Settings → Privacy & Security → Open Anyway**, or run `xattr -cr "/Applications/Grok Supervisor.app"`. The disk image also has `打开说明.txt` and `清除隔离属性.command`.
+
+Verify downloads with `SHA256SUMS.txt` on the same release:
+
+```sh
+shasum -a 256 -c SHA256SUMS.txt
+```
 
 Windows needs the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
 
