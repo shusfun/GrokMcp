@@ -70,6 +70,8 @@ let settings: Settings = {
   terminal_provider: "default",
   terminal_command_template: "",
   default_view_mode: "headless",
+  debug_enabled: false,
+  debug_payloads: false,
 };
 
 let grokInstalled = false;
@@ -119,7 +121,7 @@ export const mockClient: Client = {
     return [{ id: 1, job_id: jobId, event_type: job.state, summary: job.last_action ?? "", created_at: job.updated_at }] satisfies BoundaryEvent[];
   },
   async statusBar(): Promise<StatusBar> {
-    return { leader_ok: true, acp_ok: true, mcp_ok: true, db_ok: true, debug_enabled: jobs.some((j) => j.debug_enabled), stalled: jobs.some((j) => j.stalled), working: 1, needs_input: 1 };
+    return { leader_ok: true, acp_ok: true, mcp_ok: true, db_ok: true, debug_enabled: Boolean(settings.debug_enabled), stalled: jobs.some((j) => j.stalled), working: 1, needs_input: 1 };
   },
   async setView(jobId, view) {
     const job = find(jobId);
@@ -194,6 +196,11 @@ export const mockClient: Client = {
   },
   async testTerminal() {},
   async debugSet(jobId, enabled, payloads) {
+    if (!jobId) {
+      settings = { ...settings, debug_enabled: enabled, debug_payloads: Boolean(payloads) };
+      emit();
+      return { job_id: "", cwd: "", project: "", title: "", state: "created", view_mode: "headless", input_owner: "supervisor", elapsed_seconds: 0, created_at: "", updated_at: "", debug_enabled: enabled };
+    }
     const job = find(jobId);
     job.debug_enabled = enabled;
     pushTrace(jobId, enabled ? "debug.enabled" : "debug.disabled", { payloads: Boolean(payloads) });

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import { getClient } from "../api";
 import type { DebugSnapshot, StatusBar as StatusBarData, TraceEvent } from "../api/client";
+import type { Settings } from "../api/client";
 import { Button } from "../components/ui/button";
+import { Segmented } from "../components/ui/segmented";
 import { Select } from "../components/ui/select";
 import { filterTrace, formatTraceLine } from "../lib/trace";
 import type { Job } from "../lib/jobs";
@@ -24,15 +26,36 @@ export function DiagnosticsPage() {
   const [source, setSource] = useState("all");
   const [paused, setPaused] = useState(false);
   const [note, setNote] = useState("");
+  const [settings, setSettings] = useState<Settings | null>(null);
 
   useEffect(() => {
     const load = () => {
       void client.listJobs().then(setJobs);
       void client.statusBar().then(setBar);
+      void client.settings().then(setSettings);
     };
     load();
     return client.subscribe(load);
   }, [client]);
+
+  const debugOn = Boolean(settings?.debug_enabled ?? bar?.debug_enabled);
+  const applyDebug = (enabled: boolean, payloads = Boolean(settings?.debug_payloads)) => {
+    const next: Settings = {
+      grok_binary_path: settings?.grok_binary_path ?? "",
+      terminal_provider: settings?.terminal_provider ?? "default",
+      terminal_command_template: settings?.terminal_command_template ?? "",
+      default_view_mode: settings?.default_view_mode ?? "headless",
+      debug_enabled: enabled,
+      debug_payloads: enabled ? payloads : false,
+    };
+    setSettings(next);
+    void client.saveSettings(next).then(() => {
+      const after = selected
+        ? client.debugSet(selected, enabled, next.debug_payloads)
+        : client.debugSet("", enabled, next.debug_payloads);
+      return after;
+    }).then(() => client.statusBar().then(setBar)).catch((e: Error) => setNote(e.message));
+  };
 
   useEffect(() => {
     if (paused || !selected) return;
@@ -64,8 +87,29 @@ export function DiagnosticsPage() {
         <span className="flex items-center gap-1.5"><Dot ok={bar?.db_ok !== false} /> DB</span>
         <span className="flex items-center gap-1.5">
           <Dot ok={!bar?.stalled} warn={bar?.stalled} />
-          {bar?.debug_enabled ? "Debug ON" : "Debug OFF"}
-          {bar?.stalled ? " · stalled" : ""}
+          {bar?.stalled ? "stalled" : "ok"}
+        </span>
+        <span className="ml-auto flex items-center gap-2">
+          <span>调试</span>
+          <Segmented
+            aria-label="调试模式"
+            value={debugOn ? "on" : "off"}
+            options={[
+              { value: "off", label: "关" },
+              { value: "on", label: "开" },
+            ]}
+            onChange={(v) => applyDebug(v === "on")}
+          />
+          {debugOn ? (
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={Boolean(settings?.debug_payloads)}
+                onChange={(e) => applyDebug(true, e.target.checked)}
+              />
+              payload
+            </label>
+          ) : null}
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-2 border-b border-[var(--line)] px-4 py-2">

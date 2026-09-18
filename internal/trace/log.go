@@ -34,6 +34,8 @@ type Log struct {
 	seq        map[string]int64
 	mem        map[string][]Event
 	dbg        map[string]DebugOpts
+	override   map[string]bool
+	global     DebugOpts
 	subs       map[int]func(Event)
 	subSeq     int
 	writes     int
@@ -52,12 +54,13 @@ func Open(root string, now func() time.Time) (*Log, error) {
 		return nil, err
 	}
 	return &Log{
-		root: root,
-		now:  now,
-		seq:  map[string]int64{},
-		mem:  map[string][]Event{},
-		dbg:  map[string]DebugOpts{},
-		subs: map[int]func(Event){},
+		root:     root,
+		now:      now,
+		seq:      map[string]int64{},
+		mem:      map[string][]Event{},
+		dbg:      map[string]DebugOpts{},
+		override: map[string]bool{},
+		subs:     map[int]func(Event){},
 	}, nil
 }
 
@@ -67,7 +70,39 @@ func (l *Log) SetDebug(jobID string, enabled, payloads bool) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.dbg[jobID] = DebugOpts{Enabled: enabled, Payloads: payloads}
+	opts := DebugOpts{Enabled: enabled, Payloads: payloads}
+	if jobID == "" {
+		l.setGlobalLocked(opts)
+		return
+	}
+	l.override[jobID] = true
+	l.dbg[jobID] = opts
+}
+
+func (l *Log) SetGlobal(enabled, payloads bool) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.setGlobalLocked(DebugOpts{Enabled: enabled, Payloads: payloads})
+}
+
+func (l *Log) setGlobalLocked(opts DebugOpts) {
+	l.global = opts
+	if !opts.Enabled {
+		l.dbg = map[string]DebugOpts{}
+		l.override = map[string]bool{}
+	}
+}
+
+func (l *Log) Global() DebugOpts {
+	if l == nil {
+		return DebugOpts{}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.global
 }
 
 func (l *Log) Debug(jobID string) DebugOpts {
@@ -76,7 +111,14 @@ func (l *Log) Debug(jobID string) DebugOpts {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.dbg[jobID]
+	return l.debugLocked(jobID)
+}
+
+func (l *Log) debugLocked(jobID string) DebugOpts {
+	if l.override[jobID] {
+		return l.dbg[jobID]
+	}
+	return l.global
 }
 
 func (l *Log) Cursor(jobID string) int64 {
@@ -125,7 +167,7 @@ func (l *Log) Emit(ev Event) {
 		l.mu.Unlock()
 		return
 	}
-	dbg := l.dbg[ev.JobID]
+	dbg := l.debugLocked(ev.JobID)
 	if ev.Level == "" {
 		ev.Level = LevelInfo
 	}

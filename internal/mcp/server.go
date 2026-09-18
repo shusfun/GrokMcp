@@ -72,7 +72,7 @@ func addTools(server *mcp.Server, backend core.Backend) {
 		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.OpenTerminalRequest) (*mcp.CallToolResult, struct{}, error) {
 			return nil, struct{}{}, backend.OpenTerminal(ctx, in)
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "grok_debug_set", Description: "为指定任务打开或关闭调试记录；默认不把过程日志发给 Codex。"},
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_debug_set", Description: "打开或关闭调试记录；job_id 为空时为全局调试模式。过程日志默认不发给 Codex。"},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.DebugSetRequest) (*mcp.CallToolResult, protocol.Job, error) {
 			out, err := backend.DebugSet(ctx, in)
 			return nil, out, err

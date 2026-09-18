@@ -121,6 +121,7 @@ func (s *Service) SetGrokPath(fn func() string) { s.grokPath = fn }
 func (s *Service) SetTrace(l *trace.Log) {
 	s.traces = l
 	s.bindAgentTrace()
+	s.applyDebugSettings()
 }
 
 func (s *Service) SetMCPConnected(v bool) {
@@ -306,10 +307,10 @@ func (s *Service) StatusBar(ctx context.Context) (protocol.StatusBar, error) {
 	diag := s.agent.Diagnose(ctx)
 	bar.LeaderOK = diag.LeaderRunning
 	bar.ACPOK = diag.ACPOK || diag.LeaderRunning
+	if s.traces != nil {
+		bar.DebugEnabled = s.traces.Global().Enabled
+	}
 	for _, j := range jobs {
-		if j.DebugEnabled {
-			bar.DebugEnabled = true
-		}
 		if j.Stalled {
 			bar.Stalled = true
 		}
@@ -335,7 +336,22 @@ func (s *Service) SaveSettings(_ context.Context, st protocol.Settings) error {
 	if st.DefaultViewMode == "" {
 		st.DefaultViewMode = string(protocol.ViewHeadless)
 	}
-	return s.store.SaveSettings(st)
+	if err := s.store.SaveSettings(st); err != nil {
+		return err
+	}
+	s.applyDebugSettings()
+	return nil
+}
+
+func (s *Service) applyDebugSettings() {
+	if s.traces == nil {
+		return
+	}
+	st, err := s.store.Settings()
+	if err != nil {
+		return
+	}
+	s.traces.SetGlobal(st.DebugEnabled, st.DebugPayloads)
 }
 
 func (s *Service) Diagnose(ctx context.Context) (protocol.DiagnoseResult, error) {

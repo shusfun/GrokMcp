@@ -105,6 +105,8 @@ type Settings struct {
 	TerminalProvider        string `json:"terminal_provider"`
 	TerminalCommandTemplate string `json:"terminal_command_template"`
 	DefaultViewMode         string `json:"default_view_mode"`
+	DebugEnabled            bool   `json:"debug_enabled"`
+	DebugPayloads           bool   `json:"debug_payloads"`
 }
 
 type DispatchTask struct {
@@ -164,7 +166,7 @@ type OpenTerminalRequest struct {
 }
 
 type DebugSetRequest struct {
-	JobID    string `json:"job_id" jsonschema:"job id"`
+	JobID    string `json:"job_id,omitempty" jsonschema:"optional job id; empty sets global debug mode"`
 	Enabled  bool   `json:"enabled"`
 	Payloads bool   `json:"payloads,omitempty"`
 }

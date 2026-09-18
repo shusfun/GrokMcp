@@ -49,6 +49,11 @@ export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, o
         ) : (
           <Button size="sm" disabled={busy} onClick={() => run(onShowTui)}>显示 TUI</Button>
         )}
+        {onDebug ? (
+          <Button size="sm" variant={job.debug_enabled ? "outline" : "default"} disabled={busy} onClick={() => run(onDebug)}>
+            {job.debug_enabled ? "关闭调试" : "开启调试"}
+          </Button>
+        ) : null}
         {turnControl ? (
           <>
             <Button size="sm" variant="danger" disabled={busy} onClick={() => run(onCancel)}>取消当前 turn</Button>
@@ -68,7 +73,6 @@ export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, o
           <DropdownItem onClick={() => void navigator.clipboard.writeText(job.grok_session_id ?? "")}>
             <span className="flex items-center gap-2"><Copy className="h-3.5 w-3.5" />复制 session ID</span>
           </DropdownItem>
-          {onDebug ? <DropdownItem onClick={() => run(onDebug)}>{job.debug_enabled ? "关闭调试" : "开启调试"}</DropdownItem> : null}
           {onTrace ? <DropdownItem onClick={() => run(onTrace)}>查看 Trace</DropdownItem> : null}
           {onExport ? <DropdownItem onClick={() => run(onExport)}>导出诊断包</DropdownItem> : null}
           {onCopyState ? <DropdownItem onClick={() => run(onCopyState)}>复制内部状态</DropdownItem> : null}

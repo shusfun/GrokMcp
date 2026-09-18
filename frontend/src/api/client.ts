@@ -5,6 +5,8 @@ export type Settings = {
   terminal_provider: string;
   terminal_command_template: string;
   default_view_mode: string;
+  debug_enabled?: boolean;
+  debug_payloads?: boolean;
 };
 
 export type Diagnose = {

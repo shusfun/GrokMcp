@@ -1166,4 +1166,40 @@ func TestNormalWaitDoesNotContainDebugLogs(t *testing.T) {
 	}
 }
 
+func TestDebugSetEmptyJobIDSetsGlobal(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	s := newTest(t, fake, terminal.NewFake())
+	if _, err := s.DebugSet(context.Background(), protocol.DebugSetRequest{Enabled: true, Payloads: true}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Settings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.DebugEnabled || !st.DebugPayloads {
+		t.Fatalf("settings %+v", st)
+	}
+	bar, err := s.StatusBar(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bar.DebugEnabled {
+		t.Fatal("status bar should show global debug")
+	}
+	s.traces.Emit(trace.Event{JobID: "none", Level: trace.LevelDebug, Source: trace.SourceACP, Name: "acp.session_update"})
+	if len(s.traces.Snapshot("none", 0, 10, nil, nil).Events) == 0 {
+		t.Fatal("global debug should record debug events")
+	}
+	if _, err := s.DebugSet(context.Background(), protocol.DebugSetRequest{Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	bar, _ = s.StatusBar(context.Background())
+	if bar.DebugEnabled {
+		t.Fatal("debug should turn off")
+	}
+}
+
 var errLoadBoom = errors.New("load failed")

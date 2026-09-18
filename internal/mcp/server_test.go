@@ -198,7 +198,7 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		"grok_set_view":       {"job_id", "view"},
 		"grok_status":         nil,
 		"grok_open_terminal":  nil,
-		"grok_debug_set":      {"job_id", "enabled"},
+		"grok_debug_set":      {"enabled"},
 		"grok_debug_snapshot": {"job_id"},
 		"grok_debug_wait":     {"job_id", "cursor"},
 		"grok_debug_export":   {"job_id"},

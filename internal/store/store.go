@@ -202,6 +202,10 @@ func (s *Store) Settings() (protocol.Settings, error) {
 			if v != "" {
 				st.DefaultViewMode = v
 			}
+		case "debug_enabled":
+			st.DebugEnabled = parseBool(v)
+		case "debug_payloads":
+			st.DebugPayloads = parseBool(v)
 		}
 	}
 	return st, rows.Err()
@@ -213,6 +217,8 @@ func (s *Store) SaveSettings(st protocol.Settings) error {
 		{"terminal_provider", st.TerminalProvider},
 		{"terminal_command_template", st.TerminalCommandTemplate},
 		{"default_view_mode", st.DefaultViewMode},
+		{"debug_enabled", fmtBool(st.DebugEnabled)},
+		{"debug_payloads", fmtBool(st.DebugPayloads)},
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -260,6 +266,22 @@ func scanJob(row rowScanner) (Record, error) {
 	rec.Job.Project = textutil.ProjectName(rec.Job.Cwd)
 	rec.RecoverFails = splitInt64(fails)
 	return rec, nil
+}
+
+func parseBool(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func fmtBool(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }
 
 func desiredView(j protocol.Job) protocol.ViewMode {

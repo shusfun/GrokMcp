@@ -1,6 +1,7 @@
 import type { Settings } from "../api/client";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Segmented } from "./ui/segmented";
 import { Select } from "./ui/select";
 
 export function SettingsForm({
@@ -56,6 +57,28 @@ export function SettingsForm({
           onChange={(default_view_mode) => onChange({ ...value, default_view_mode })}
         />
       </label>
+      <div className="space-y-2">
+        <p className="text-sm text-[var(--muted)]">调试模式</p>
+        <Segmented
+          aria-label="调试模式"
+          value={value.debug_enabled ? "on" : "off"}
+          options={[
+            { value: "off", label: "关" },
+            { value: "on", label: "开" },
+          ]}
+          onChange={(v) => onChange({ ...value, debug_enabled: v === "on" })}
+        />
+        {value.debug_enabled ? (
+          <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+            <input
+              type="checkbox"
+              checked={Boolean(value.debug_payloads)}
+              onChange={(e) => onChange({ ...value, debug_payloads: e.target.checked })}
+            />
+            记录脱敏后的 payload
+          </label>
+        ) : null}
+      </div>
       <div className="flex gap-2">
         <Button type="submit">保存</Button>
         <Button type="button" variant="outline" onClick={onTest}>测试终端模板</Button>

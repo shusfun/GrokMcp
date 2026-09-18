@@ -138,6 +138,31 @@ func TestRotateDeletesOldFiles(t *testing.T) {
 	}
 }
 
+func TestGlobalDebugEnablesWithoutJobSet(t *testing.T) {
+	l, err := Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Emit(Event{JobID: "j1", Level: LevelDebug, Source: SourceACP, Name: "acp.session_update"})
+	if len(l.Snapshot("j1", 0, 20, nil, nil).Events) != 0 {
+		t.Fatal("debug leaked while off")
+	}
+	l.SetGlobal(true, false)
+	l.Emit(Event{JobID: "j1", Level: LevelDebug, Source: SourceACP, Name: "acp.session_update"})
+	snap := l.Snapshot("j1", 0, 20, nil, nil)
+	if len(snap.Events) != 1 || snap.Events[0].Name != "acp.session_update" {
+		t.Fatalf("%+v", snap)
+	}
+	l.SetGlobal(false, true)
+	l.Emit(Event{JobID: "j1", Level: LevelDebug, Source: SourceACP, Name: "acp.session_update", Fields: map[string]any{"prompt": "secret"}})
+	if l.Debug("j1").Enabled {
+		t.Fatal("global off should clear job debug")
+	}
+	if n := len(l.Snapshot("j1", 1, 20, nil, nil).Events); n != 0 {
+		t.Fatalf("debug after global off: %d", n)
+	}
+}
+
 func TestWaitUntilError(t *testing.T) {
 	l, err := Open(t.TempDir(), time.Now)
 	if err != nil {

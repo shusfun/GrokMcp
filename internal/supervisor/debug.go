@@ -9,7 +9,19 @@ import (
 	"grokmcp/internal/trace"
 )
 
-func (s *Service) DebugSet(_ context.Context, req protocol.DebugSetRequest) (protocol.Job, error) {
+func (s *Service) DebugSet(ctx context.Context, req protocol.DebugSetRequest) (protocol.Job, error) {
+	if req.JobID == "" {
+		st, err := s.store.Settings()
+		if err != nil {
+			return protocol.Job{}, err
+		}
+		st.DebugEnabled = req.Enabled
+		st.DebugPayloads = req.Payloads
+		if err := s.SaveSettings(ctx, st); err != nil {
+			return protocol.Job{}, err
+		}
+		return protocol.Job{DebugEnabled: req.Enabled}, nil
+	}
 	if _, err := s.load(req.JobID); err != nil {
 		return protocol.Job{}, err
 	}

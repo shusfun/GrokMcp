@@ -64,3 +64,22 @@ func TestEventsEmptyJSONArray(t *testing.T) {
 		t.Fatalf("Events JSON = %s, want []", raw)
 	}
 }
+
+func TestDebugSettingsRoundTrip(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	st := protocol.Settings{DefaultViewMode: "headless", DebugEnabled: true, DebugPayloads: true}
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.DebugEnabled || !got.DebugPayloads {
+		t.Fatalf("%+v", got)
+	}
+}
