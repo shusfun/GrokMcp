@@ -33,6 +33,7 @@ export const wailsClient: Client = {
   settings: () => call("Settings"),
   saveSettings: (s) => call("SaveSettings", s),
   diagnose: () => call("Diagnose"),
+  installGrok: () => call("InstallGrok"),
   testTerminal: (t) => call("TestTerminal", t),
   appVersion: () => call("AppVersion"),
   checkUpdate: () => call("CheckUpdate"),

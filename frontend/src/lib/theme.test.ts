@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { toggleResolved } from "./theme";
+import { cycleAppearance } from "./theme";
 
 describe("theme", () => {
-  it("toggles resolved light and dark", () => {
-    expect(toggleResolved("dark")).toBe("light");
-    expect(toggleResolved("light")).toBe("dark");
+  it("cycles system, light and dark", () => {
+    expect(cycleAppearance("system")).toBe("light");
+    expect(cycleAppearance("light")).toBe("dark");
+    expect(cycleAppearance("dark")).toBe("system");
   });
 });

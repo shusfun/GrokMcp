@@ -34,8 +34,10 @@ export function resolveTheme(appearance: Appearance): "light" | "dark" {
   return systemPrefersDark() ? "dark" : "light";
 }
 
-export function toggleResolved(resolved: "light" | "dark"): Appearance {
-  return resolved === "dark" ? "light" : "dark";
+export function cycleAppearance(appearance: Appearance): Appearance {
+  if (appearance === "system") return "light";
+  if (appearance === "light") return "dark";
+  return "system";
 }
 
 export function applyAppearance(appearance: Appearance) {

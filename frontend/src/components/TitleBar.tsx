@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { LayoutDashboard, Moon, Settings, Sun } from "lucide-react";
+import { LayoutDashboard, Monitor, Moon, Settings, Sun } from "lucide-react";
 import { Link, useLocation } from "react-router";
 import { getClient } from "../api";
 import { hideWindow, hostOS, isWails, minimiseWindow, toggleMaximiseWindow } from "../api/wails";
 import { cn } from "../lib/cn";
-import { toggleResolved } from "../lib/theme";
+import { cycleAppearance } from "../lib/theme";
 import { useTheme } from "./ThemeProvider";
 import { Button } from "./ui/button";
 import { Dialog } from "./ui/dialog";
@@ -20,17 +20,23 @@ function WindowButtons() {
   );
 }
 
+const APPEARANCE_META = {
+  system: { icon: Monitor, label: "跟随系统" },
+  light: { icon: Sun, label: "浅色" },
+  dark: { icon: Moon, label: "深色" },
+} as const;
+
 function ThemeToggle() {
-  const { resolved, setAppearance } = useTheme();
-  const Icon = resolved === "dark" ? Moon : Sun;
-  const next = resolved === "dark" ? "浅色" : "深色";
+  const { appearance, setAppearance } = useTheme();
+  const meta = APPEARANCE_META[appearance];
+  const Icon = meta.icon;
   return (
     <Button
       size="icon"
       variant="ghost"
-      aria-label={`切换${next}`}
-      title={`切换${next}`}
-      onClick={() => setAppearance(toggleResolved(resolved))}
+      aria-label={`外观：${meta.label}`}
+      title={`外观：${meta.label}`}
+      onClick={() => setAppearance(cycleAppearance(appearance))}
     >
       <Icon className="h-3.5 w-3.5" />
     </Button>

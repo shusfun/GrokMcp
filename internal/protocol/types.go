@@ -165,6 +165,12 @@ type DiagnoseResult struct {
 	Error         string `json:"error,omitempty"`
 }
 
+type InstallResult struct {
+	OK       bool   `json:"ok"`
+	GrokPath string `json:"grok_path"`
+	Log      string `json:"log"`
+}
+
 type StatusBar struct {
 	LeaderOK     bool `json:"leader_ok"`
 	MCPOK        bool `json:"mcp_ok"`

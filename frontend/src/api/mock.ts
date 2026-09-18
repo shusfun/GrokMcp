@@ -1,5 +1,5 @@
 import type { Job } from "../lib/jobs";
-import type { BoundaryEvent, Client, Diagnose, Settings, StatusBar } from "./client";
+import type { BoundaryEvent, Client, Diagnose, InstallResult, Settings, StatusBar } from "./client";
 
 const jobs: Job[] = [
   {
@@ -55,6 +55,8 @@ let settings: Settings = {
   terminal_command_template: "",
   default_view_mode: "headless",
 };
+
+let grokInstalled = false;
 
 const listeners = new Set<() => void>();
 function emit() {
@@ -126,6 +128,18 @@ export const mockClient: Client = {
     settings = { ...s };
   },
   async diagnose(): Promise<Diagnose> {
+    if (!grokInstalled) {
+      return {
+        grok_path: "",
+        grok_version: "",
+        logged_in: false,
+        leader_running: false,
+        leader_socket: "~/.grok/leader.sock",
+        compatible: false,
+        attach_mode: "",
+        error: "Grok 二进制未找到。安装 Grok Build 并登录后再试。",
+      };
+    }
     return {
       grok_path: "/Users/shus/.grok/bin/grok",
       grok_version: "1.0.34",
@@ -135,6 +149,10 @@ export const mockClient: Client = {
       compatible: true,
       attach_mode: "boundary",
     };
+  },
+  async installGrok(): Promise<InstallResult> {
+    grokInstalled = true;
+    return { ok: true, grok_path: "/Users/shus/.grok/bin/grok", log: "mock: installed to ~/.grok/bin/grok" };
   },
   async testTerminal() {},
   async appVersion() {

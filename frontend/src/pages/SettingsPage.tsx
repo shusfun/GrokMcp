@@ -20,6 +20,8 @@ export function SettingsPage() {
   const [version, setVersion] = useState("");
   const [updateNote, setUpdateNote] = useState("");
   const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installLog, setInstallLog] = useState("");
 
   useEffect(() => {
     void client.settings().then(setValue);
@@ -79,6 +81,26 @@ export function SettingsPage() {
         <section id="diagnose" className="space-y-3">
           <h2 className="text-sm font-semibold">运行状况</h2>
           {diagError ? <p className="text-sm text-[var(--fail)]">{diagError}</p> : null}
+          {diagnose && !diagnose.grok_path ? (
+            <div className="space-y-2 rounded-md border border-[var(--line)] bg-[var(--row)] p-3">
+              <p className="text-sm">未找到 Grok。将安装到用户目录 <span className="font-mono text-xs">~/.grok/bin</span>，不需要管理员权限。</p>
+              <Button
+                size="sm"
+                disabled={installing}
+                onClick={() => {
+                  setInstalling(true);
+                  setInstallLog("");
+                  void client.installGrok().then((res) => {
+                    setInstallLog(res.log || (res.ok ? "安装完成" : "安装失败"));
+                    return client.diagnose().then(setDiagnose);
+                  }).catch((e: Error) => setInstallLog(e.message)).finally(() => setInstalling(false));
+                }}
+              >
+                {installing ? "正在安装…" : "安装 Grok"}
+              </Button>
+              {installLog ? <pre className="max-h-40 overflow-auto whitespace-pre-wrap text-xs text-[var(--muted)]">{installLog}</pre> : null}
+            </div>
+          ) : null}
           {diagnose ? <DiagnoseList data={diagnose} /> : !diagError ? <p className="text-sm text-[var(--muted)]">诊断中…</p> : null}
         </section>
 

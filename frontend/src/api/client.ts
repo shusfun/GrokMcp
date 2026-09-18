@@ -18,6 +18,12 @@ export type Diagnose = {
   error?: string;
 };
 
+export type InstallResult = {
+  ok: boolean;
+  grok_path: string;
+  log: string;
+};
+
 export type StatusBar = {
   leader_ok: boolean;
   mcp_ok: boolean;
@@ -53,6 +59,7 @@ export type Client = {
   settings(): Promise<Settings>;
   saveSettings(s: Settings): Promise<void>;
   diagnose(): Promise<Diagnose>;
+  installGrok(): Promise<InstallResult>;
   testTerminal(template: string): Promise<void>;
   appVersion(): Promise<string>;
   checkUpdate(): Promise<UpdateRelease | null>;

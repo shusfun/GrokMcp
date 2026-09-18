@@ -6,6 +6,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
 	"grokmcp/internal/core"
+	"grokmcp/internal/grokbin"
 	"grokmcp/internal/protocol"
 	"grokmcp/internal/version"
 )
@@ -68,6 +69,34 @@ func (s *Service) SaveSettings(ctx context.Context, st protocol.Settings) error 
 
 func (s *Service) Diagnose(ctx context.Context) (protocol.DiagnoseResult, error) {
 	return s.Backend.Diagnose(ctx)
+}
+
+func (s *Service) InstallGrok(ctx context.Context) (protocol.InstallResult, error) {
+	log, err := (grokbin.Installer{}).Install(ctx)
+	res := protocol.InstallResult{Log: log}
+	if err != nil {
+		if res.Log != "" {
+			res.Log += "\n"
+		}
+		res.Log += err.Error()
+		return res, nil
+	}
+	d, dErr := s.Backend.Diagnose(ctx)
+	if dErr != nil {
+		if res.Log != "" {
+			res.Log += "\n"
+		}
+		res.Log += dErr.Error()
+	}
+	res.GrokPath = d.GrokPath
+	res.OK = d.GrokPath != ""
+	if !res.OK {
+		if res.Log != "" {
+			res.Log += "\n"
+		}
+		res.Log += "安装结束但仍未找到 grok。"
+	}
+	return res, nil
 }
 
 func (s *Service) TestTerminal(ctx context.Context, template string) error {
