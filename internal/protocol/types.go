@@ -99,16 +99,16 @@ type Settings struct {
 }
 
 type DispatchTask struct {
-	Title         string `json:"title"`
+	Title         string `json:"title,omitempty"`
 	Prompt        string `json:"prompt"`
-	Cwd           string `json:"cwd"`
-	Worktree      bool   `json:"worktree"`
-	CodexThreadID string `json:"codex_thread_id"`
+	Cwd           string `json:"cwd,omitempty"`
+	Worktree      bool   `json:"worktree,omitempty"`
+	CodexThreadID string `json:"codex_thread_id,omitempty"`
 }
 
 type DispatchRequest struct {
 	Tasks []DispatchTask `json:"tasks"`
-	Cwd   string         `json:"cwd"`
+	Cwd   string         `json:"cwd,omitempty"`
 }
 
 type DispatchResult struct {
@@ -117,8 +117,8 @@ type DispatchResult struct {
 
 type WaitRequest struct {
 	JobIDs     []string `json:"job_ids"`
-	Mode       string   `json:"mode"`
-	TimeoutSec int      `json:"timeout_sec"`
+	Mode       string   `json:"mode,omitempty"`
+	TimeoutSec int      `json:"timeout_sec,omitempty"`
 }
 
 type WaitResult struct {
@@ -136,7 +136,7 @@ const (
 type PlanDecideRequest struct {
 	JobID  string       `json:"job_id"`
 	Decide PlanDecision `json:"decide"`
-	Notes  string       `json:"notes"`
+	Notes  string       `json:"notes,omitempty"`
 }
 
 type FollowupRequest struct {
@@ -150,8 +150,8 @@ type SetViewRequest struct {
 }
 
 type OpenTerminalRequest struct {
-	JobID     string `json:"job_id"`
-	Dashboard bool   `json:"dashboard"`
+	JobID     string `json:"job_id,omitempty"`
+	Dashboard bool   `json:"dashboard,omitempty"`
 }
 
 type DiagnoseResult struct {

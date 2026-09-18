@@ -2,11 +2,14 @@ package mcp
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"grokmcp/internal/core"
 	"grokmcp/internal/protocol"
+	"grokmcp/internal/version"
 )
 
 type stub struct{ core.Backend }
@@ -32,15 +35,15 @@ func (stub) ListJobs(context.Context) ([]protocol.Job, error)     { return nil, 
 func (stub) OpenTerminal(context.Context, protocol.OpenTerminalRequest) error {
 	return nil
 }
-func (stub) OpenProject(context.Context, string) error                  { return nil }
-func (stub) Continue(context.Context, string) (protocol.Job, error)     { return protocol.Job{}, nil }
-func (stub) DetachView(context.Context, string) (protocol.Job, error)   { return protocol.Job{}, nil }
-func (stub) Settings(context.Context) (protocol.Settings, error)        { return protocol.Settings{}, nil }
-func (stub) SaveSettings(context.Context, protocol.Settings) error      { return nil }
+func (stub) OpenProject(context.Context, string) error                { return nil }
+func (stub) Continue(context.Context, string) (protocol.Job, error)   { return protocol.Job{}, nil }
+func (stub) DetachView(context.Context, string) (protocol.Job, error) { return protocol.Job{}, nil }
+func (stub) Settings(context.Context) (protocol.Settings, error)      { return protocol.Settings{}, nil }
+func (stub) SaveSettings(context.Context, protocol.Settings) error    { return nil }
 func (stub) Diagnose(context.Context) (protocol.DiagnoseResult, error) {
 	return protocol.DiagnoseResult{}, nil
 }
-func (stub) StatusBar(context.Context) (protocol.StatusBar, error)      { return protocol.StatusBar{}, nil }
+func (stub) StatusBar(context.Context) (protocol.StatusBar, error) { return protocol.StatusBar{}, nil }
 func (stub) Events(context.Context, string) ([]protocol.BoundaryEvent, error) {
 	return nil, nil
 }
@@ -48,7 +51,199 @@ func (stub) TestTerminal(context.Context, string) error { return nil }
 func (stub) Subscribe(func(protocol.Event)) func()      { return func() {} }
 func (stub) Close() error                               { return nil }
 
-func TestAddTools(t *testing.T) {
-	server := sdk.NewServer(&sdk.Implementation{Name: "t", Version: "0"}, nil)
-	addTools(server, stub{})
+type recorder struct {
+	stub
+	mu       sync.Mutex
+	listJobs int
+	status   []string
+	dispatch []protocol.DispatchRequest
+	wait     []protocol.WaitRequest
+	plan     []protocol.PlanDecideRequest
+	open     []protocol.OpenTerminalRequest
+}
+
+func (r *recorder) Dispatch(_ context.Context, req protocol.DispatchRequest) (protocol.DispatchResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dispatch = append(r.dispatch, req)
+	return protocol.DispatchResult{}, nil
+}
+
+func (r *recorder) Wait(_ context.Context, req protocol.WaitRequest) (protocol.WaitResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wait = append(r.wait, req)
+	return protocol.WaitResult{}, nil
+}
+
+func (r *recorder) PlanDecide(_ context.Context, req protocol.PlanDecideRequest) (protocol.Job, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.plan = append(r.plan, req)
+	return protocol.Job{}, nil
+}
+
+func (r *recorder) Status(_ context.Context, jobID string) (protocol.Job, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.status = append(r.status, jobID)
+	return protocol.Job{}, nil
+}
+
+func (r *recorder) ListJobs(context.Context) ([]protocol.Job, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.listJobs++
+	return nil, nil
+}
+
+func (r *recorder) OpenTerminal(_ context.Context, req protocol.OpenTerminalRequest) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.open = append(r.open, req)
+	return nil
+}
+
+func connectMCP(t *testing.T, backend core.Backend) *sdk.ClientSession {
+	t.Helper()
+	ctx := context.Background()
+	server := newServer(backend)
+	client := sdk.NewClient(&sdk.Implementation{Name: "t", Version: "0"}, nil)
+	st, ct := sdk.NewInMemoryTransports()
+	ss, err := server.Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ss.Close() })
+	cs, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+func schemaMap(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}
+
+func requiredProps(schema any) []string {
+	raw, _ := schemaMap(schema)["required"].([]any)
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, x := range raw {
+		s, ok := x.(string)
+		if !ok {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func nestedSchema(schema any, keys ...string) any {
+	cur := schema
+	for _, key := range keys {
+		cur = schemaMap(cur)[key]
+	}
+	return cur
+}
+
+func callTool(t *testing.T, cs *sdk.ClientSession, name string, args map[string]any) {
+	t.Helper()
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	if res.IsError {
+		t.Fatalf("%s rejected optional args: %v", name, res.Content)
+	}
+}
+
+func TestToolInputSchemaRequired(t *testing.T) {
+	cs := connectMCP(t, stub{})
+	init := cs.InitializeResult()
+	if init == nil || init.ServerInfo == nil {
+		t.Fatal("missing serverInfo")
+	}
+	if init.ServerInfo.Version != version.Version {
+		t.Fatalf("serverInfo.version = %q, want %q", init.ServerInfo.Version, version.Version)
+	}
+
+	listed, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{
+		"grok_dispatch":      {"tasks"},
+		"grok_wait":          {"job_ids"},
+		"grok_plan_decide":   {"job_id", "decide"},
+		"grok_followup":      {"job_id", "prompt"},
+		"grok_cancel_turn":   {"job_id"},
+		"grok_set_view":      {"job_id", "view"},
+		"grok_status":        nil,
+		"grok_open_terminal": nil,
+	}
+	got := map[string][]string{}
+	for _, tool := range listed.Tools {
+		got[tool.Name] = requiredProps(tool.InputSchema)
+		if tool.Name == "grok_dispatch" {
+			items := nestedSchema(tool.InputSchema, "properties", "tasks", "items")
+			if req := requiredProps(items); !slices.Equal(req, []string{"prompt"}) {
+				t.Errorf("grok_dispatch tasks[].required = %v, want [prompt]", req)
+			}
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("tools = %v, want %v", keys(got), keys(want))
+	}
+	for name, req := range want {
+		if !slices.Equal(got[name], req) {
+			t.Errorf("%s required = %v, want %v", name, got[name], req)
+		}
+	}
+}
+
+func TestOptionalToolArgsReachBackend(t *testing.T) {
+	rec := &recorder{}
+	cs := connectMCP(t, rec)
+
+	callTool(t, cs, "grok_status", map[string]any{})
+	callTool(t, cs, "grok_wait", map[string]any{"job_ids": []string{"j1"}})
+	callTool(t, cs, "grok_plan_decide", map[string]any{"job_id": "j1", "decide": "approve"})
+	callTool(t, cs, "grok_dispatch", map[string]any{"tasks": []any{map[string]any{"prompt": "do it"}}})
+	callTool(t, cs, "grok_open_terminal", map[string]any{"dashboard": true})
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.listJobs != 1 {
+		t.Fatalf("ListJobs calls = %d, want 1", rec.listJobs)
+	}
+	if len(rec.status) != 0 {
+		t.Fatalf("Status called with %v, want list-all via empty job_id", rec.status)
+	}
+	if len(rec.wait) != 1 || rec.wait[0].Mode != "" || rec.wait[0].TimeoutSec != 0 {
+		t.Fatalf("Wait = %+v, want job_ids only", rec.wait)
+	}
+	if len(rec.plan) != 1 || rec.plan[0].Notes != "" {
+		t.Fatalf("PlanDecide = %+v, want notes omitted", rec.plan)
+	}
+	if len(rec.dispatch) != 1 || rec.dispatch[0].Cwd != "" || rec.dispatch[0].Tasks[0].Prompt != "do it" {
+		t.Fatalf("Dispatch = %+v, want prompt-only task", rec.dispatch)
+	}
+	if len(rec.open) != 1 || !rec.open[0].Dashboard || rec.open[0].JobID != "" {
+		t.Fatalf("OpenTerminal = %+v, want dashboard only", rec.open)
+	}
+}
+
+func keys(m map[string][]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
 }

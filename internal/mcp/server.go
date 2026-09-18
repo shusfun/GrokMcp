@@ -6,6 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"grokmcp/internal/core"
 	"grokmcp/internal/protocol"
+	"grokmcp/internal/version"
 )
 
 func Run(ctx context.Context, backend core.Backend) error {
@@ -13,9 +14,14 @@ func Run(ctx context.Context, backend core.Backend) error {
 		ls.SetMCPConnected(true)
 		defer ls.SetMCPConnected(false)
 	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "grok_supervisor", Version: "0.1.0"}, nil)
-	addTools(server, backend)
+	server := newServer(backend)
 	return server.Run(ctx, &mcp.StdioTransport{})
+}
+
+func newServer(backend core.Backend) *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: "grok_supervisor", Version: version.Version}, nil)
+	addTools(server, backend)
+	return server
 }
 
 func addTools(server *mcp.Server, backend core.Backend) {
@@ -53,7 +59,7 @@ func addTools(server *mcp.Server, backend core.Backend) {
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "grok_status", Description: "返回阶段、显示状态、摘要和最近边界事件。"},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			JobID string `json:"job_id" jsonschema:"optional job id"`
+			JobID string `json:"job_id,omitempty" jsonschema:"optional job id"`
 		}) (*mcp.CallToolResult, any, error) {
 			if in.JobID != "" {
 				job, err := backend.Status(ctx, in.JobID)
