@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"grokmcp/internal/core"
+	"grokmcp/internal/integration"
 	"grokmcp/internal/paths"
 )
 
@@ -166,19 +167,7 @@ func FormatMCPConfig(exe string) string {
 }
 
 func formatMCPConfig(exe string, windows bool) string {
-	var b strings.Builder
-	if windows {
-		fmt.Fprintf(&b, "codex mcp add grok_supervisor -- %s mcp\n", powershellQuote(exe))
-		b.WriteString("# PowerShell quoting; paste the TOML below into config if unsure.\n\n")
-	} else {
-		fmt.Fprintf(&b, "codex mcp add grok_supervisor -- %s mcp\n\n", posixQuote(exe))
-	}
-	fmt.Fprintf(&b, "[mcp_servers.grok_supervisor]\n")
-	fmt.Fprintf(&b, "command = %s\n", tomlQuote(exe))
-	fmt.Fprintf(&b, "args = [\"mcp\"]\n")
-	fmt.Fprintf(&b, "startup_timeout_sec = 30\n")
-	fmt.Fprintf(&b, "tool_timeout_sec = 21600\n")
-	return b.String()
+	return integration.FormatCLIConfig(exe, windows)
 }
 
 func tomlQuote(s string) string {

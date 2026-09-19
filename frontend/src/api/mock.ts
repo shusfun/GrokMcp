@@ -3,7 +3,7 @@ import { sortJobs } from "../lib/jobs";
 import type { Project, PromptResult } from "../lib/projects";
 import { sortProjects } from "../lib/projects";
 import { builtinPromptTemplate, generateDraft } from "../lib/prompt";
-import type { BoundaryEvent, Client, DebugSnapshot, Diagnose, InstallResult, Settings, StatusBar, TraceEvent } from "./client";
+import type { BoundaryEvent, Client, DebugSnapshot, Diagnose, InstallResult, MCPApplyResult, MCPConfigBundle, MCPInstallStatus, Settings, StatusBar, TraceEvent } from "./client";
 
 const jobs: Job[] = [
   {
@@ -74,6 +74,21 @@ const jobs: Job[] = [
 ];
 
 const nowIso = () => new Date().toISOString();
+
+const mockMCPBundle: MCPConfigBundle = {
+  server_id: "grok_supervisor",
+  exe: "/Applications/Grok Supervisor.app/Contents/MacOS/GrokMcp",
+  args: ["mcp"],
+  startup_timeout_sec: 30,
+  tool_timeout_sec: 21600,
+  json: `{\n  "mcpServers": {\n    "grok_supervisor": {\n      "type": "stdio",\n      "command": "/Applications/Grok Supervisor.app/Contents/MacOS/GrokMcp",\n      "args": ["mcp"],\n      "startup_timeout_sec": 30,\n      "tool_timeout_sec": 21600\n    }\n  }\n}\n`,
+  update_json: "",
+  deep_link: "ccswitch://v1/import?resource=mcp&apps=codex&config=e30",
+  codex_add_command: `codex mcp add grok_supervisor -- "/Applications/Grok Supervisor.app/Contents/MacOS/GrokMcp" mcp`,
+  toml: `[mcp_servers.grok_supervisor]\ncommand = "/Applications/Grok Supervisor.app/Contents/MacOS/GrokMcp"\nargs = ["mcp"]\nstartup_timeout_sec = 30\ntool_timeout_sec = 21600\n`,
+  platform: "darwin",
+  deep_link_supported: true,
+};
 const projects: Project[] = [
   { project_id: "proj-suiyuan", name: "suiyuan", root: "/tmp/suiyuan", canonical_path: "/tmp/suiyuan", imported: true, skill_status: "installed", skill_version: "1", created_at: nowIso(), updated_at: nowIso(), last_used_at: nowIso(), active_count: 1, needs_input_count: 0 },
   { project_id: "proj-auth", name: "auth", root: "/tmp/auth", canonical_path: "/tmp/auth", imported: true, skill_status: "missing", created_at: nowIso(), updated_at: nowIso(), last_used_at: nowIso(), active_count: 1, needs_input_count: 1 },
@@ -302,6 +317,25 @@ export const mockClient: Client = {
   },
   async saveSettings(s) {
     settings = { ...s };
+  },
+  async mcpConfig(): Promise<MCPConfigBundle> {
+    return { ...mockMCPBundle };
+  },
+  async mcpStatus(): Promise<MCPInstallStatus> {
+    return {
+      generated: { ...mockMCPBundle },
+      ccswitch: { detected: "missing", registered: false, enabled_codex: false, needs_update: false, message: "未检测到 CC-Switch 数据库" },
+      codex: { cli_found: true, live_visible: false, enabled: false, command_match: false, timeouts_present: false, needs_update: false },
+    };
+  },
+  async openCCSwitchMCPImport(): Promise<MCPApplyResult> {
+    return { ok: true, action: "pending_user_confirmation", target: "ccswitch", live_effective: false, message: "已打开 CC-Switch，待你确认导入", next_step: "在 CC-Switch 完成导入后重新检测。" };
+  },
+  async openCCSwitchApp(): Promise<MCPApplyResult> {
+    return { ok: true, action: "pending_user_confirmation", target: "ccswitch", live_effective: false, message: "已请求打开 CC-Switch" };
+  },
+  async addMCPToCodex(): Promise<MCPApplyResult> {
+    return { ok: true, action: "created", target: "codex", live_effective: true, message: "已调用 codex mcp add grok_supervisor" };
   },
   async diagnose(): Promise<Diagnose> {
     if (!grokInstalled) {

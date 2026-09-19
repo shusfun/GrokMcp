@@ -16,6 +16,7 @@ import (
 	"grokmcp/internal/core"
 	"grokmcp/internal/grokbin"
 	"grokmcp/internal/ids"
+	"grokmcp/internal/integration"
 	"grokmcp/internal/ipc"
 	"grokmcp/internal/paths"
 	"grokmcp/internal/store"
@@ -25,10 +26,11 @@ import (
 )
 
 type Options struct {
-	Home     string
-	Agent    agent.Agent
-	Term     terminal.Launcher
-	GrokPath string
+	Home        string
+	Agent       agent.Agent
+	Term        terminal.Launcher
+	GrokPath    string
+	Integration integration.Options
 }
 
 func Open(ctx context.Context, opts Options) (core.Backend, func(), error) {
@@ -114,7 +116,15 @@ func openHost(ctx context.Context, opts Options, lock *os.File) (core.Backend, f
 		_ = lock.Close()
 		return nil, nil, err
 	}
-	srv := ipc.Serve(ln, svc)
+	integOpts := opts.Integration
+	if integOpts.Executable == nil {
+		integOpts.Executable = MCPExecutable
+	}
+	h := &host{
+		Service: svc,
+		integ:   integration.New(integOpts),
+	}
+	srv := ipc.Serve(ln, h)
 	cleanup := func() {
 		_ = srv.Close()
 		_ = svc.Close()
@@ -122,7 +132,7 @@ func openHost(ctx context.Context, opts Options, lock *os.File) (core.Backend, f
 		_ = ln.Close()
 		_ = lock.Close()
 	}
-	return svc, cleanup, nil
+	return h, cleanup, nil
 }
 
 func tryDial(ctx context.Context) *ipc.Client {

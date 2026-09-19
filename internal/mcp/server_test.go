@@ -83,6 +83,21 @@ func (stub) SaveSettings(context.Context, protocol.Settings) error    { return n
 func (stub) Diagnose(context.Context) (protocol.DiagnoseResult, error) {
 	return protocol.DiagnoseResult{}, nil
 }
+func (stub) MCPConfig(context.Context) (protocol.MCPConfigBundle, error) {
+	return protocol.MCPConfigBundle{}, nil
+}
+func (stub) MCPStatus(context.Context) (protocol.MCPInstallStatus, error) {
+	return protocol.MCPInstallStatus{}, nil
+}
+func (stub) OpenCCSwitchMCPImport(context.Context) (protocol.MCPApplyResult, error) {
+	return protocol.MCPApplyResult{}, nil
+}
+func (stub) OpenCCSwitchApp(context.Context) (protocol.MCPApplyResult, error) {
+	return protocol.MCPApplyResult{}, nil
+}
+func (stub) AddMCPToCodex(context.Context) (protocol.MCPApplyResult, error) {
+	return protocol.MCPApplyResult{}, nil
+}
 func (stub) StatusBar(context.Context) (protocol.StatusBar, error) { return protocol.StatusBar{}, nil }
 func (stub) Events(context.Context, string) ([]protocol.BoundaryEvent, error) {
 	return nil, nil

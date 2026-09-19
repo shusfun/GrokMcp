@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"grokmcp/internal/agent"
+	"grokmcp/internal/integration"
 	"grokmcp/internal/paths"
 	"grokmcp/internal/protocol"
 	"grokmcp/internal/terminal"
@@ -329,6 +330,70 @@ func TestFormatMCPConfigWindowsPath(t *testing.T) {
 	}
 	if !strings.Contains(toml, `command = `+wantTOML) {
 		t.Fatalf("toml command should use TOML escapes:\n%s", toml)
+	}
+}
+
+func TestMCPConfigIPCRoundtrip(t *testing.T) {
+	home := testHome(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	opened := ""
+	host, hostCleanup, err := Open(ctx, Options{
+		Home:  home,
+		Agent: agent.NewFake(),
+		Term:  terminal.NewFake(),
+		Integration: integration.Options{
+			CCSwitchDB: home + "/cc-switch.db",
+			LookPath:   func(string) (string, error) { return "", errors.New("no codex") },
+			OpenURL: func(_ context.Context, u string) error {
+				opened = u
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(hostCleanup)
+	bundle, err := host.MCPConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.ServerID != protocol.MCPServerID || bundle.DeepLink == "" {
+		t.Fatalf("%#v", bundle)
+	}
+	st, err := host.MCPStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Generated.JSON == "" || st.CCSwitch.Registered {
+		t.Fatalf("status %#v", st.CCSwitch)
+	}
+	res, err := host.OpenCCSwitchMCPImport(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Action != protocol.MCPActionPendingUser || opened == "" || res.LiveEffective {
+		t.Fatalf("import %#v opened=%q", res, opened)
+	}
+	cl, clCleanup, err := Connect(ctx, ConnectOptions{Home: home, DisableStart: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(clCleanup)
+	got, err := cl.MCPConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ServerID != bundle.ServerID || got.DeepLink == "" {
+		t.Fatalf("ipc config %#v", got)
+	}
+	st2, err := cl.MCPStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st2.Generated.ServerID != protocol.MCPServerID {
+		t.Fatalf("ipc status %#v", st2)
 	}
 }
 

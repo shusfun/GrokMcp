@@ -10,6 +10,58 @@ export type Settings = {
   debug_payloads?: boolean;
 };
 
+export type MCPConfigBundle = {
+  server_id: string;
+  exe: string;
+  args: string[];
+  startup_timeout_sec: number;
+  tool_timeout_sec: number;
+  json: string;
+  update_json: string;
+  deep_link: string;
+  codex_add_command: string;
+  toml: string;
+  platform?: string;
+  deep_link_supported?: boolean;
+};
+
+export type MCPCCSwitchStatus = {
+  detected: string;
+  registered: boolean;
+  enabled_codex: boolean;
+  needs_update: boolean;
+  legacy_id?: string;
+  matched_id?: string;
+  next_step?: string;
+  message?: string;
+};
+
+export type MCPCodexStatus = {
+  cli_found: boolean;
+  live_name?: string;
+  live_visible: boolean;
+  enabled: boolean;
+  command_match: boolean;
+  timeouts_present: boolean;
+  needs_update: boolean;
+  error?: string;
+};
+
+export type MCPInstallStatus = {
+  generated: MCPConfigBundle;
+  ccswitch: MCPCCSwitchStatus;
+  codex: MCPCodexStatus;
+};
+
+export type MCPApplyResult = {
+  ok: boolean;
+  action: string;
+  target: string;
+  live_effective: boolean;
+  message: string;
+  next_step?: string;
+};
+
 export type Diagnose = {
   grok_path: string;
   grok_version: string;
@@ -110,6 +162,11 @@ export type Client = {
   settings(): Promise<Settings>;
   saveSettings(s: Settings): Promise<void>;
   diagnose(): Promise<Diagnose>;
+  mcpConfig(): Promise<MCPConfigBundle>;
+  mcpStatus(): Promise<MCPInstallStatus>;
+  openCCSwitchMCPImport(): Promise<MCPApplyResult>;
+  openCCSwitchApp(): Promise<MCPApplyResult>;
+  addMCPToCodex(): Promise<MCPApplyResult>;
   installGrok(): Promise<InstallResult>;
   testTerminal(template: string): Promise<void>;
   debugSet(jobId: string, enabled: boolean, payloads?: boolean): Promise<Job>;

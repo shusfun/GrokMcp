@@ -189,6 +189,21 @@ func (c *Client) SaveSettings(ctx context.Context, s protocol.Settings) error {
 func (c *Client) Diagnose(ctx context.Context) (protocol.DiagnoseResult, error) {
 	return decode[protocol.DiagnoseResult](c.call(ctx, "diagnose", struct{}{}))
 }
+func (c *Client) MCPConfig(ctx context.Context) (protocol.MCPConfigBundle, error) {
+	return decode[protocol.MCPConfigBundle](c.call(ctx, "mcpConfig", struct{}{}))
+}
+func (c *Client) MCPStatus(ctx context.Context) (protocol.MCPInstallStatus, error) {
+	return decode[protocol.MCPInstallStatus](c.call(ctx, "mcpStatus", struct{}{}))
+}
+func (c *Client) OpenCCSwitchMCPImport(ctx context.Context) (protocol.MCPApplyResult, error) {
+	return decode[protocol.MCPApplyResult](c.call(ctx, "openCCSwitchMCPImport", struct{}{}))
+}
+func (c *Client) OpenCCSwitchApp(ctx context.Context) (protocol.MCPApplyResult, error) {
+	return decode[protocol.MCPApplyResult](c.call(ctx, "openCCSwitchApp", struct{}{}))
+}
+func (c *Client) AddMCPToCodex(ctx context.Context) (protocol.MCPApplyResult, error) {
+	return decode[protocol.MCPApplyResult](c.call(ctx, "addMCPToCodex", struct{}{}))
+}
 func (c *Client) StatusBar(ctx context.Context) (protocol.StatusBar, error) {
 	return decode[protocol.StatusBar](c.call(ctx, "statusBar", struct{}{}))
 }

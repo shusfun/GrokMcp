@@ -136,6 +136,26 @@ func (s *Service) Diagnose(ctx context.Context) (protocol.DiagnoseResult, error)
 	return s.Backend.Diagnose(ctx)
 }
 
+func (s *Service) MCPConfig(ctx context.Context) (protocol.MCPConfigBundle, error) {
+	return s.Backend.MCPConfig(ctx)
+}
+
+func (s *Service) MCPStatus(ctx context.Context) (protocol.MCPInstallStatus, error) {
+	return s.Backend.MCPStatus(ctx)
+}
+
+func (s *Service) OpenCCSwitchMCPImport(ctx context.Context) (protocol.MCPApplyResult, error) {
+	return s.Backend.OpenCCSwitchMCPImport(ctx)
+}
+
+func (s *Service) OpenCCSwitchApp(ctx context.Context) (protocol.MCPApplyResult, error) {
+	return s.Backend.OpenCCSwitchApp(ctx)
+}
+
+func (s *Service) AddMCPToCodex(ctx context.Context) (protocol.MCPApplyResult, error) {
+	return s.Backend.AddMCPToCodex(ctx)
+}
+
 func (s *Service) InstallGrok(ctx context.Context) (protocol.InstallResult, error) {
 	log, err := (grokbin.Installer{}).Install(ctx)
 	res := protocol.InstallResult{Log: log}

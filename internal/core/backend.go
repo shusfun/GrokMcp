@@ -37,6 +37,11 @@ type Backend interface {
 	Settings(ctx context.Context) (protocol.Settings, error)
 	SaveSettings(ctx context.Context, s protocol.Settings) error
 	Diagnose(ctx context.Context) (protocol.DiagnoseResult, error)
+	MCPConfig(ctx context.Context) (protocol.MCPConfigBundle, error)
+	MCPStatus(ctx context.Context) (protocol.MCPInstallStatus, error)
+	OpenCCSwitchMCPImport(ctx context.Context) (protocol.MCPApplyResult, error)
+	OpenCCSwitchApp(ctx context.Context) (protocol.MCPApplyResult, error)
+	AddMCPToCodex(ctx context.Context) (protocol.MCPApplyResult, error)
 	StatusBar(ctx context.Context) (protocol.StatusBar, error)
 	Events(ctx context.Context, jobID string) ([]protocol.BoundaryEvent, error)
 	TestTerminal(ctx context.Context, template string) error

@@ -3,6 +3,7 @@ import { useLocation } from "react-router";
 import { getClient } from "../api";
 import type { Diagnose, Settings, UpdateRelease } from "../api/client";
 import { DiagnoseList } from "../components/DiagnoseList";
+import { MCPInstallPanel } from "../components/MCPInstallPanel";
 import { SettingsForm } from "../components/SettingsForm";
 import { useTheme } from "../components/ThemeProvider";
 import { Button } from "../components/ui/button";
@@ -76,6 +77,11 @@ export function SettingsPage() {
             <p className="text-sm text-[var(--muted)]">加载中…</p>
           )}
           {note ? <p className="text-sm text-[var(--accent)]">{note}</p> : null}
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold">集成 / MCP 配置</h2>
+          <MCPInstallPanel />
         </section>
 
         <section id="diagnose" className="space-y-3">

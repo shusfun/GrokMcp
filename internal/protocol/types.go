@@ -329,3 +329,79 @@ type JobPage struct {
 	NextCursor string `json:"next_cursor,omitempty"`
 	HasMore    bool   `json:"has_more"`
 }
+
+const (
+	MCPServerID       = "grok_supervisor"
+	MCPServerLegacyID = "Grok Supervisor"
+
+	MCPStartupTimeoutSec = 30
+	MCPToolTimeoutSec    = 21600
+
+	MCPDetectDetected          = "detected"
+	MCPDetectUnsupportedSchema = "unsupported_schema"
+	MCPDetectLocked            = "locked"
+	MCPDetectMissing           = "missing"
+	MCPDetectReadError         = "read_error"
+
+	MCPActionPendingUser = "pending_user_confirmation"
+	MCPActionUnchanged   = "unchanged"
+	MCPActionCreated     = "created"
+	MCPActionUpdated     = "updated"
+	MCPActionFailed      = "failed"
+	MCPActionNeedsManual = "needs_manual"
+
+	MCPTargetCCSwitch = "ccswitch"
+	MCPTargetCodex    = "codex"
+)
+
+type MCPConfigBundle struct {
+	ServerID          string   `json:"server_id"`
+	Exe               string   `json:"exe"`
+	Args              []string `json:"args"`
+	StartupTimeoutSec int      `json:"startup_timeout_sec"`
+	ToolTimeoutSec    int      `json:"tool_timeout_sec"`
+	JSON              string   `json:"json"`
+	UpdateJSON        string   `json:"update_json"`
+	DeepLink          string   `json:"deep_link"`
+	CodexAddCommand   string   `json:"codex_add_command"`
+	TOML              string   `json:"toml"`
+	Platform          string   `json:"platform,omitempty"`
+	DeepLinkSupported bool     `json:"deep_link_supported"`
+}
+
+type MCPCCSwitchStatus struct {
+	Detected     string `json:"detected"`
+	Registered   bool   `json:"registered"`
+	EnabledCodex bool   `json:"enabled_codex"`
+	NeedsUpdate  bool   `json:"needs_update"`
+	LegacyID     string `json:"legacy_id,omitempty"`
+	MatchedID    string `json:"matched_id,omitempty"`
+	NextStep     string `json:"next_step,omitempty"`
+	Message      string `json:"message,omitempty"`
+}
+
+type MCPCodexStatus struct {
+	CLIFound        bool   `json:"cli_found"`
+	LiveName        string `json:"live_name,omitempty"`
+	LiveVisible     bool   `json:"live_visible"`
+	Enabled         bool   `json:"enabled"`
+	CommandMatch    bool   `json:"command_match"`
+	TimeoutsPresent bool   `json:"timeouts_present"`
+	NeedsUpdate     bool   `json:"needs_update"`
+	Error           string `json:"error,omitempty"`
+}
+
+type MCPInstallStatus struct {
+	Generated MCPConfigBundle   `json:"generated"`
+	CCSwitch  MCPCCSwitchStatus `json:"ccswitch"`
+	Codex     MCPCodexStatus    `json:"codex"`
+}
+
+type MCPApplyResult struct {
+	OK            bool   `json:"ok"`
+	Action        string `json:"action"`
+	Target        string `json:"target"`
+	LiveEffective bool   `json:"live_effective"`
+	Message       string `json:"message"`
+	NextStep      string `json:"next_step,omitempty"`
+}

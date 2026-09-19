@@ -296,6 +296,21 @@ func (s *Server) dispatch(ctx context.Context, req Request) (json.RawMessage, er
 	case "diagnose":
 		out, err := s.svc.Diagnose(ctx)
 		return marshal(out, err)
+	case "mcpConfig":
+		out, err := s.svc.MCPConfig(ctx)
+		return marshal(out, err)
+	case "mcpStatus":
+		out, err := s.svc.MCPStatus(ctx)
+		return marshal(out, err)
+	case "openCCSwitchMCPImport":
+		out, err := s.svc.OpenCCSwitchMCPImport(ctx)
+		return marshal(out, err)
+	case "openCCSwitchApp":
+		out, err := s.svc.OpenCCSwitchApp(ctx)
+		return marshal(out, err)
+	case "addMCPToCodex":
+		out, err := s.svc.AddMCPToCodex(ctx)
+		return marshal(out, err)
 	case "statusBar":
 		out, err := s.svc.StatusBar(ctx)
 		return marshal(out, err)
