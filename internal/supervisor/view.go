@@ -213,6 +213,7 @@ func (s *Service) watchTUI(job protocol.Job, h terminal.Handle, waitCtx context.
 	select {
 	case <-waitCtx.Done():
 	case <-done:
+	case <-s.stopWatch:
 	}
 	s.mu.Lock()
 	rt := s.rt[job.JobID]
