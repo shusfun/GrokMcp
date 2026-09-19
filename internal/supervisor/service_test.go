@@ -966,6 +966,40 @@ func TestDispatchHeadedStillStartsPlan(t *testing.T) {
 	}
 }
 
+func TestCloseAfterHeadedWindowsCwdUnblocksWait(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	term := terminal.NewFake()
+	s := newTest(t, fake, term)
+	res, err := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: `C:\Work\GrokMcp`, Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
+		t.Fatal(err)
+	}
+	waitView(t, s, id, protocol.ViewHeaded)
+	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close hung after headed TUI on windows cwd")
+	}
+}
+
 func TestPumpTraceContainsSkipReason(t *testing.T) {
 	fake := agent.NewFake()
 	fake.PromptFn = func(string, string) agent.PromptResult {

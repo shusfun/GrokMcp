@@ -181,6 +181,9 @@ func (s *Service) Close() error {
 	for _, h := range handles {
 		_ = h.Close()
 	}
+	if f, ok := s.term.(*terminal.Fake); ok {
+		f.CloseAll()
+	}
 	var agentErr error
 	if s.agent != nil {
 		agentErr = s.agent.Close()

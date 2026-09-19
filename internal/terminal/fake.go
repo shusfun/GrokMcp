@@ -45,6 +45,7 @@ func (f *Fake) OpenResume(_ context.Context, _, sessionID, cwd string) (Handle, 
 	if f.NoPID {
 		pid = 0
 	}
+	f.closeLocked(sessionID)
 	st := &fakeState{
 		wait:     make(chan struct{}),
 		process:  true,
@@ -53,7 +54,7 @@ func (f *Fake) OpenResume(_ context.Context, _, sessionID, cwd string) (Handle, 
 		windowID: "w-" + sessionID,
 	}
 	f.Handles[sessionID] = st
-	return waitHandle{fake: f, id: sessionID}, nil
+	return waitHandle{fake: f, id: sessionID, st: st}, nil
 }
 
 func (f *Fake) FocusResume(_ context.Context, sessionID string) (bool, error) {
@@ -70,7 +71,7 @@ func (f *Fake) ExistingResume(_ context.Context, sessionID string) (Handle, bool
 	if !ok || (!st.process && !st.window) {
 		return nil, false, nil
 	}
-	return waitHandle{fake: f, id: sessionID}, true, nil
+	return waitHandle{fake: f, id: sessionID, st: st}, true, nil
 }
 
 func (f *Fake) SeedWindow(sessionID string) {
@@ -112,6 +113,18 @@ func (f *Fake) TestTemplate(_ context.Context, template, command string) error {
 func (f *Fake) CloseResume(sessionID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.closeLocked(sessionID)
+}
+
+func (f *Fake) CloseAll() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id := range f.Handles {
+		f.closeLocked(id)
+	}
+}
+
+func (f *Fake) closeLocked(sessionID string) {
 	f.finishLocked(sessionID, false, false)
 }
 
@@ -174,11 +187,15 @@ func (f *Fake) ResumeSnapshot() []string {
 type waitHandle struct {
 	fake *Fake
 	id   string
+	st   *fakeState
 }
 
 func (h waitHandle) Wait() error {
 	h.fake.mu.Lock()
-	st := h.fake.Handles[h.id]
+	st := h.st
+	if st == nil {
+		st = h.fake.Handles[h.id]
+	}
 	if st == nil || st.closed || !st.process || !st.window {
 		h.fake.mu.Unlock()
 		return nil

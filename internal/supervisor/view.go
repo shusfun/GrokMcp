@@ -193,12 +193,20 @@ func (s *Service) commitHeaded(job protocol.Job, h terminal.Handle) (protocol.Jo
 		rt = &runtime{stallSince: map[string]time.Time{}}
 		s.rt[job.JobID] = rt
 	}
+	prev := rt.term
+	prevCancel := rt.waitCancel
 	waitCtx, waitCancel := context.WithCancel(context.Background())
 	rt.term = h
 	rt.waitCancel = waitCancel
 	rt.attachGen++
 	gen := rt.attachGen
 	s.mu.Unlock()
+	if prevCancel != nil {
+		prevCancel()
+	}
+	if prev != nil && prev != h {
+		_ = prev.Close()
+	}
 	job = s.markHeaded(job)
 	s.goWatch(func() { s.watchTUI(job, h, waitCtx, gen) })
 	return s.snapshot(job.JobID), nil
@@ -212,8 +220,10 @@ func (s *Service) watchTUI(job protocol.Job, h terminal.Handle, waitCtx context.
 	}()
 	select {
 	case <-waitCtx.Done():
+		_ = h.Close()
 	case <-done:
 	case <-s.stopWatch:
+		_ = h.Close()
 	}
 	s.mu.Lock()
 	rt := s.rt[job.JobID]

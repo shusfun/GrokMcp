@@ -67,6 +67,14 @@ func LockPath() (string, error) {
 	return filepath.Join(dir, "supervisor.lock"), nil
 }
 
+func StartLockPath() (string, error) {
+	dir, err := AppDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "supervisor.start.lock"), nil
+}
+
 func LogsDir() (string, error) {
 	dir, err := AppDir()
 	if err != nil {

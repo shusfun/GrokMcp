@@ -21,7 +21,7 @@ func main() {
 	ctx := context.Background()
 	switch cmd {
 	case "mcp":
-		backend, cleanup, err := appruntime.Open(ctx, appruntime.Options{})
+		backend, cleanup, err := appruntime.Connect(ctx, appruntime.ConnectOptions{})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -31,7 +31,21 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "mcp-config":
+		exe, err := appruntime.MCPExecutable()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Print(appruntime.FormatMCPConfig(exe))
 	case "doctor":
+		exe, err := appruntime.MCPExecutable()
+		if err != nil {
+			exe = "(unknown)"
+		}
+		fmt.Printf("executable\t%s\n", exe)
+		fmt.Printf("mcp_command\t%s mcp\n", exe)
+		fmt.Printf("supervisor_ipc\t%v\n", appruntime.Probe(ctx))
 		finder := grokbin.New()
 		d := finder.Diagnose(ctx, "")
 		g := agent.NewGrok(d.GrokPath, finder)
@@ -55,7 +69,7 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "usage: %s [desktop|mcp|doctor]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s [desktop|mcp|mcp-config|doctor]\n", os.Args[0])
 		os.Exit(2)
 	}
 }

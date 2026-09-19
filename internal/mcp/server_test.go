@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -270,6 +271,96 @@ func TestToolInputSchemaRequired(t *testing.T) {
 			t.Errorf("%s required = %v, want %v", name, got[name], req)
 		}
 	}
+}
+
+func TestServerInstructionsAndAnnotations(t *testing.T) {
+	cs := connectMCP(t, stub{})
+	init := cs.InitializeResult()
+	if init == nil || init.Instructions == "" {
+		t.Fatal("missing instructions")
+	}
+	for _, needle := range []string{"Grok", "grok_wait", "session", "模型"} {
+		if !strings.Contains(init.Instructions, needle) {
+			t.Errorf("instructions missing %q:\n%s", needle, init.Instructions)
+		}
+	}
+
+	listed, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]*sdk.Tool{}
+	for _, tool := range listed.Tools {
+		if tool.Annotations == nil {
+			t.Errorf("%s missing annotations", tool.Name)
+			continue
+		}
+		byName[tool.Name] = tool
+	}
+
+	assertExec := func(name string) {
+		t.Helper()
+		tool := byName[name]
+		if tool == nil {
+			t.Fatalf("missing %s", name)
+		}
+		a := tool.Annotations
+		if a.ReadOnlyHint {
+			t.Errorf("%s ReadOnlyHint = true", name)
+		}
+		if a.DestructiveHint == nil || !*a.DestructiveHint {
+			t.Errorf("%s DestructiveHint = %v, want true", name, a.DestructiveHint)
+		}
+		if a.OpenWorldHint == nil || !*a.OpenWorldHint {
+			t.Errorf("%s OpenWorldHint = %v, want true", name, a.OpenWorldHint)
+		}
+	}
+	assertExec("grok_dispatch")
+	assertExec("grok_plan_decide")
+	assertExec("grok_followup")
+
+	assertRead := func(name string) {
+		t.Helper()
+		tool := byName[name]
+		if tool == nil {
+			t.Fatalf("missing %s", name)
+		}
+		if !tool.Annotations.ReadOnlyHint {
+			t.Errorf("%s ReadOnlyHint = false", name)
+		}
+	}
+	assertRead("grok_status")
+	assertRead("grok_prompt_generate")
+
+	cancel := byName["grok_cancel_turn"]
+	if cancel == nil {
+		t.Fatal("missing grok_cancel_turn")
+	}
+	if cancel.Annotations.ReadOnlyHint || cancel.Annotations.DestructiveHint == nil || !*cancel.Annotations.DestructiveHint || cancel.Annotations.OpenWorldHint == nil || !*cancel.Annotations.OpenWorldHint {
+		t.Errorf("grok_cancel_turn annotations = %+v", cancel.Annotations)
+	}
+
+	assertClosedDestructive := func(name string) {
+		t.Helper()
+		tool := byName[name]
+		if tool == nil {
+			t.Fatalf("missing %s", name)
+		}
+		a := tool.Annotations
+		if a.ReadOnlyHint {
+			t.Errorf("%s ReadOnlyHint = true", name)
+		}
+		if a.DestructiveHint == nil || !*a.DestructiveHint {
+			t.Errorf("%s DestructiveHint = %v, want true", name, a.DestructiveHint)
+		}
+		if a.OpenWorldHint == nil || *a.OpenWorldHint {
+			t.Errorf("%s OpenWorldHint = %v, want false", name, a.OpenWorldHint)
+		}
+	}
+	assertClosedDestructive("grok_skill_update")
+	assertClosedDestructive("grok_skill_remove")
+	assertClosedDestructive("grok_project_remove")
+	assertClosedDestructive("grok_prompt_save")
 }
 
 func TestOptionalToolArgsReachBackend(t *testing.T) {
