@@ -65,7 +65,7 @@ func (s *Service) probeCodex(ctx context.Context, exe string) protocol.MCPCodexS
 	st.CommandMatch = filepath.Clean(cmd) == filepath.Clean(exe) && len(args) == 1 && args[0] == "mcp"
 	st.TimeoutsPresent = timeoutPresent(srv.StartupTimeoutSec, protocol.MCPStartupTimeoutSec) &&
 		timeoutPresent(srv.ToolTimeoutSec, protocol.MCPToolTimeoutSec)
-	st.NeedsUpdate = !st.CommandMatch || !st.TimeoutsPresent
+	st.NeedsUpdate = !isStableID(srv.Name) || !st.CommandMatch || !st.TimeoutsPresent
 	return st
 }
 
@@ -173,6 +173,13 @@ func (s *Service) handleExistingCodex(ctx context.Context, bin string, bundle pr
 		args = srv.Transport.Args
 	}
 	commandMatch := filepath.Clean(cmd) == filepath.Clean(bundle.Exe) && len(args) == 1 && args[0] == "mcp"
+	if !isStableID(srv.Name) {
+		return protocol.MCPApplyResult{
+			OK: true, Action: protocol.MCPActionNeedsManual, Target: protocol.MCPTargetCodex, LiveEffective: false,
+			Message:  fmt.Sprintf("旧 MCP 名称无效（%s）：Codex 桌面不接受空格", srv.Name),
+			NextStep: "请移除旧的 Grok Supervisor，并用复制的 TOML 或 CC-Switch deep link 新增 grok_supervisor；然后在 Codex 设置的 MCP Servers 中 Restart。不会自动 remove，以免丢失 timeout/env。",
+		}, nil
+	}
 	if commandMatch && !srv.Enabled {
 		return protocol.MCPApplyResult{
 			OK: true, Action: protocol.MCPActionNeedsManual, Target: protocol.MCPTargetCodex, LiveEffective: false,

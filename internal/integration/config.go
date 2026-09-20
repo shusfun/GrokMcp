@@ -26,6 +26,10 @@ func isAlias(id string) bool {
 	}
 }
 
+func isStableID(id string) bool {
+	return id == protocol.MCPServerID
+}
+
 func isGrokMcpCommand(command, currentExe string) bool {
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -153,21 +157,12 @@ func deepLinkSupported(goos string) bool {
 	return goos == "darwin" || goos == "windows"
 }
 
-func BuildBundle(exe string, goos string, jsonID string) (protocol.MCPConfigBundle, error) {
-	if jsonID == "" {
-		jsonID = protocol.MCPServerID
-	}
+func BuildBundle(exe string, goos string, _ string) (protocol.MCPConfigBundle, error) {
 	js, err := mcpServersJSON(protocol.MCPServerID, exe)
 	if err != nil {
 		return protocol.MCPConfigBundle{}, err
 	}
 	updateJSON := js
-	if jsonID != protocol.MCPServerID {
-		updateJSON, err = mcpServersJSON(jsonID, exe)
-		if err != nil {
-			return protocol.MCPConfigBundle{}, err
-		}
-	}
 	link, err := DeepLink(protocol.MCPServerID, exe)
 	if err != nil {
 		return protocol.MCPConfigBundle{}, err

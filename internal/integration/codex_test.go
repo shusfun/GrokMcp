@@ -114,7 +114,7 @@ func TestFindCodexAliasCoversStableAndLegacyNames(t *testing.T) {
 	}
 }
 
-func TestAddCodexDoesNotDuplicateAlias(t *testing.T) {
+func TestAddCodexLegacyAliasRequiresMigration(t *testing.T) {
 	exe := "/tmp/GrokMcp"
 	fake := &fakeCodex{list: []codexServer{{
 		Name:    protocol.MCPServerLegacyID,
@@ -135,8 +135,11 @@ func TestAddCodexDoesNotDuplicateAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Action != protocol.MCPActionUnchanged || !res.LiveEffective {
+	if res.Action != protocol.MCPActionNeedsManual || res.LiveEffective {
 		t.Fatalf("%#v", res)
+	}
+	if !strings.Contains(res.Message, "名称无效") || !strings.Contains(res.NextStep, protocol.MCPServerID) {
+		t.Fatalf("missing migration guidance: %#v", res)
 	}
 	for _, c := range fake.calls {
 		if len(c) > 1 && c[1] == "add" {
@@ -148,7 +151,7 @@ func TestAddCodexDoesNotDuplicateAlias(t *testing.T) {
 func TestAddCodexMatchingDisabledNeedsManual(t *testing.T) {
 	exe := "/tmp/GrokMcp"
 	fake := &fakeCodex{list: []codexServer{{
-		Name:    protocol.MCPServerLegacyID,
+		Name:    protocol.MCPServerID,
 		Enabled: false,
 		Transport: &codexTransport{
 			Command: exe,
@@ -384,7 +387,7 @@ func TestProbeCodexStatusLayers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !st.Codex.CLIFound || !st.Codex.LiveVisible || !st.Codex.CommandMatch || !st.Codex.Enabled || !st.Codex.TimeoutsPresent || st.Codex.NeedsUpdate {
+	if !st.Codex.CLIFound || !st.Codex.LiveVisible || !st.Codex.CommandMatch || !st.Codex.Enabled || !st.Codex.TimeoutsPresent || !st.Codex.NeedsUpdate {
 		t.Fatalf("%#v", st.Codex)
 	}
 	if st.CCSwitch.Registered {

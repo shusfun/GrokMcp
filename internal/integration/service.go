@@ -59,11 +59,6 @@ func (s *Service) Status(ctx context.Context) (protocol.MCPInstallStatus, error)
 		return protocol.MCPInstallStatus{}, err
 	}
 	cc := s.probeCCSwitch(ctx, bundle.Exe)
-	if cc.MatchedID != "" && cc.MatchedID != protocol.MCPServerID {
-		if upd, err := mcpServersJSON(cc.MatchedID, bundle.Exe); err == nil {
-			bundle.UpdateJSON = upd
-		}
-	}
 	return protocol.MCPInstallStatus{
 		Generated: bundle,
 		CCSwitch:  cc,

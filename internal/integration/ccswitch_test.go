@@ -68,8 +68,25 @@ func TestProbeCCSwitchRegisteredLegacyAndNeedsUpdate(t *testing.T) {
 	if st.CCSwitch.LegacyID != protocol.MCPServerLegacyID || st.CCSwitch.MatchedID != protocol.MCPServerLegacyID {
 		t.Fatalf("alias %#v", st.CCSwitch)
 	}
-	if !containsJSONKey(st.Generated.UpdateJSON, protocol.MCPServerLegacyID) {
-		t.Fatalf("update json should use matched id:\n%s", st.Generated.UpdateJSON)
+	if !containsJSONKey(st.Generated.UpdateJSON, protocol.MCPServerID) || containsJSONKey(st.Generated.UpdateJSON, protocol.MCPServerLegacyID) {
+		t.Fatalf("migration json must use stable id:\n%s", st.Generated.UpdateJSON)
+	}
+}
+
+func TestProbeCCSwitchLegacyNameNeedsMigrationEvenWhenConfigMatches(t *testing.T) {
+	exe := "/Applications/Grok Supervisor.app/Contents/MacOS/GrokMcp"
+	db := tempCCSwitchDB(t, []mcpRow{{
+		ID: protocol.MCPServerLegacyID, Name: protocol.MCPServerLegacyID,
+		Config:  `{"type":"stdio","command":"` + exe + `","args":["mcp"],"startup_timeout_sec":30,"tool_timeout_sec":21600}`,
+		Enabled: true,
+	}})
+	s := New(Options{Executable: func() (string, error) { return exe, nil }, CCSwitchDB: db, GOOS: "darwin", LookPath: func(string) (string, error) { return "", errString("missing") }})
+	st, err := s.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.CCSwitch.Registered || !st.CCSwitch.NeedsUpdate || st.CCSwitch.LegacyID == "" {
+		t.Fatalf("legacy id must require migration: %#v", st.CCSwitch)
 	}
 }
 
@@ -93,6 +110,23 @@ func TestProbeCCSwitchMatchNoUpdate(t *testing.T) {
 	}
 	if !st.CCSwitch.Registered || st.CCSwitch.NeedsUpdate || !st.CCSwitch.EnabledCodex {
 		t.Fatalf("%#v", st.CCSwitch)
+	}
+}
+
+func TestProbeCCSwitchStableIDAllowsDisplayName(t *testing.T) {
+	exe := "/Applications/Grok Supervisor.app/Contents/MacOS/GrokMcp"
+	db := tempCCSwitchDB(t, []mcpRow{{
+		ID: protocol.MCPServerID, Name: protocol.MCPServerLegacyID,
+		Config:  `{"type":"stdio","command":"` + exe + `","args":["mcp"],"startup_timeout_sec":30,"tool_timeout_sec":21600}`,
+		Enabled: true,
+	}})
+	s := New(Options{Executable: func() (string, error) { return exe, nil }, CCSwitchDB: db, GOOS: "darwin", LookPath: func(string) (string, error) { return "", errString("missing") }})
+	st, err := s.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.CCSwitch.Registered || st.CCSwitch.NeedsUpdate || st.CCSwitch.LegacyID != "" {
+		t.Fatalf("stable id with display name should be valid: %#v", st.CCSwitch)
 	}
 }
 
@@ -153,7 +187,7 @@ func TestOpenCCSwitchImportPendingAndDoesNotWriteDB(t *testing.T) {
 	}
 }
 
-func TestOpenCCSwitchImportDoesNotUseDeepLinkWhenNeedsUpdate(t *testing.T) {
+func TestOpenCCSwitchImportMigratesLegacyNameWithStableDeepLink(t *testing.T) {
 	exe := "/Applications/Grok Supervisor.app/Contents/MacOS/GrokMcp"
 	db := tempCCSwitchDB(t, []mcpRow{{
 		ID:      protocol.MCPServerLegacyID,
@@ -161,14 +195,14 @@ func TestOpenCCSwitchImportDoesNotUseDeepLinkWhenNeedsUpdate(t *testing.T) {
 		Config:  `{"type":"stdio","command":"/old/GrokMcp","args":["mcp"],"startup_timeout_sec":30,"tool_timeout_sec":21600}`,
 		Enabled: true,
 	}})
-	called := false
+	opened := ""
 	s := New(Options{
 		Executable: func() (string, error) { return exe, nil },
 		CCSwitchDB: db,
 		GOOS:       "darwin",
 		LookPath:   func(string) (string, error) { return "", errString("missing") },
-		OpenURL: func(context.Context, string) error {
-			called = true
+		OpenURL: func(_ context.Context, raw string) error {
+			opened = raw
 			return nil
 		},
 	})
@@ -176,8 +210,11 @@ func TestOpenCCSwitchImportDoesNotUseDeepLinkWhenNeedsUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Action != protocol.MCPActionNeedsManual || called {
-		t.Fatalf("action=%s called=%v", res.Action, called)
+	if res.Action != protocol.MCPActionPendingUser || opened == "" || !containsJSONKeyFromLink(t, opened, protocol.MCPServerID) {
+		t.Fatalf("action=%s opened=%q res=%#v", res.Action, opened, res)
+	}
+	if !strings.Contains(res.NextStep, "删除旧的") {
+		t.Fatalf("missing legacy cleanup instruction: %#v", res)
 	}
 }
 

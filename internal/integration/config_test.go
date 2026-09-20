@@ -107,7 +107,7 @@ func TestFormatCLIConfigMatchesLegacyLayout(t *testing.T) {
 	}
 }
 
-func TestUpdateJSONUsesLegacyID(t *testing.T) {
+func TestUpdateJSONAlwaysUsesStableID(t *testing.T) {
 	exe := `/tmp/GrokMcp`
 	b, err := BuildBundle(exe, "darwin", protocol.MCPServerLegacyID)
 	if err != nil {
@@ -116,7 +116,7 @@ func TestUpdateJSONUsesLegacyID(t *testing.T) {
 	if !strings.Contains(b.JSON, `"grok_supervisor"`) {
 		t.Fatalf("new json should use stable id:\n%s", b.JSON)
 	}
-	if !strings.Contains(b.UpdateJSON, `"Grok Supervisor"`) {
-		t.Fatalf("update json should use legacy id:\n%s", b.UpdateJSON)
+	if !strings.Contains(b.UpdateJSON, `"grok_supervisor"`) || strings.Contains(b.UpdateJSON, `"Grok Supervisor"`) {
+		t.Fatalf("update json must use stable id:\n%s", b.UpdateJSON)
 	}
 }

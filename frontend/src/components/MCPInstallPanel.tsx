@@ -121,11 +121,28 @@ export function MCPInstallPanel() {
         {mode === "configured" ? (
           <p className="text-sm">已配置。不要再用 Codex Direct 添加重复项。</p>
         ) : null}
-        {mode === "needs_update" ? (
-          <>
-            <p className="text-xs text-[var(--muted)]">已存在别名，deep link 只合并 apps，不能更新命令路径。请复制 JSON 并在 CC-Switch MCP 编辑页粘贴。</p>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => onCopy("更新 JSON", jsonText)}>复制更新 JSON</Button>
+		{mode === "needs_update" ? (
+			<>
+				<p className="text-xs text-[var(--muted)]">
+					{status.ccswitch.legacy_id
+						? "旧名称含空格，Codex 桌面会拒绝加载。请导入 grok_supervisor，并删除旧的 Grok Supervisor。"
+						: "已存在配置需要更新。deep link 不能覆盖原 server_config，请复制 JSON 并在 CC-Switch MCP 编辑页粘贴。"}
+				</p>
+				<div className="flex flex-wrap gap-2">
+					<Button size="sm" onClick={() => onCopy("更新 JSON", jsonText)}>复制更新 JSON</Button>
+					{status.ccswitch.legacy_id && canOpenDeepLink(status.ccswitch, bundle) ? (
+						<Button
+							size="sm"
+							disabled={busy}
+							onClick={() => void run(
+								"迁移到有效 MCP 名称",
+								"将打开 CC-Switch 并导入 grok_supervisor。完成后请删除旧的 Grok Supervisor，再重新检测。",
+								() => client.openCCSwitchMCPImport(),
+							)}
+						>
+							导入有效 id
+						</Button>
+					) : null}
               <Button
                 size="sm"
                 variant="outline"
@@ -162,9 +179,12 @@ export function MCPInstallPanel() {
           <Button size="sm" variant="outline" onClick={() => onCopy("命令", bundle.codex_add_command)}>复制 add 命令</Button>
           <Button size="sm" variant="outline" onClick={() => onCopy(" TOML", bundle.toml)}>复制 TOML</Button>
         </div>
-        {status.codex.live_visible && status.codex.command_match && !status.codex.enabled ? (
+		{status.codex.live_visible && status.codex.command_match && !status.codex.enabled ? (
           <p className="text-xs text-[var(--muted)]">该 MCP 已存在但被禁用，请在 Codex 配置或 MCP 管理入口中启用。不会自动 remove+add。</p>
-        ) : null}
+		) : null}
+		{status.codex.live_name === "Grok Supervisor" ? (
+			<p className="text-xs text-[var(--fail)]">旧名称包含空格，Codex 桌面会拒绝加载。请迁移为 grok_supervisor，并在 Codex 设置 → MCP Servers 中 Restart。</p>
+		) : null}
         {status.codex.live_visible && status.codex.needs_update && !status.codex.command_match ? (
           <p className="text-xs text-[var(--muted)]">若已有 timeout/env，不会自动 remove，以免损坏配置。</p>
         ) : null}

@@ -9,7 +9,7 @@ export function ccswitchMode(st: MCPCCSwitchStatus): CCSwitchMode {
 }
 
 export function canOpenDeepLink(st: MCPCCSwitchStatus, bundle: MCPConfigBundle): boolean {
-  return ccswitchMode(st) === "import" && bundle.deep_link_supported !== false;
+	return (ccswitchMode(st) === "import" || Boolean(st.legacy_id)) && bundle.deep_link_supported !== false;
 }
 
 export function applyLooksLiveEffective(res: MCPApplyResult): boolean {
@@ -43,12 +43,12 @@ export function layerLabels(st: { ccswitch: MCPCCSwitchStatus; codex: MCPCodexSt
   let registered = "未登记";
   if (cc.detected === "missing") registered = "未检测到 CC-Switch";
   else if (cc.detected === "read_error" || cc.detected === "locked" || cc.detected === "unsupported_schema") registered = cc.message || "无法探测";
-  else if (cc.registered) registered = cc.legacy_id ? `已登记（${cc.legacy_id}）` : "已登记";
+	else if (cc.registered) registered = cc.legacy_id ? `旧名称无效（${cc.legacy_id}）` : "已登记";
   return {
     generated: "当前应用配置",
     registered,
     enabled: cc.enabled_codex ? "CC-Switch 已启用 Codex" : "CC-Switch 未启用 Codex",
-    live: !cx.cli_found ? "未找到 Codex CLI" : cx.live_visible ? (cx.enabled ? "Codex live 可见且启用" : "Codex 已存在但被禁用") : "Codex live 未见",
+		live: !cx.cli_found ? "未找到 Codex CLI" : cx.live_visible ? (cx.live_name === "Grok Supervisor" ? "旧名称含空格，桌面加载失败" : cx.enabled ? "Codex live 可见且启用" : "Codex 已存在但被禁用") : "Codex live 未见",
   };
 }
 

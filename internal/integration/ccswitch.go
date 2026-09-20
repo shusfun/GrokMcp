@@ -60,6 +60,7 @@ func (s *Service) probeCCSwitch(_ context.Context, exe string) protocol.MCPCCSwi
 	}
 	defer rows.Close()
 	st := protocol.MCPCCSwitchStatus{Detected: protocol.MCPDetectDetected}
+	var legacy *protocol.MCPCCSwitchStatus
 	for rows.Next() {
 		var id, name, cfg string
 		var enabled any
@@ -73,21 +74,34 @@ func (s *Service) probeCCSwitch(_ context.Context, exe string) protocol.MCPCCSwi
 		if !ok || !isGrokMcpCommand(spec.Command, exe) {
 			continue
 		}
-		st.Registered = true
-		st.MatchedID = id
-		if id == protocol.MCPServerLegacyID || name == protocol.MCPServerLegacyID {
-			st.LegacyID = protocol.MCPServerLegacyID
+		candidate := protocol.MCPCCSwitchStatus{
+			Detected:     protocol.MCPDetectDetected,
+			Registered:   true,
+			MatchedID:    id,
+			EnabledCodex: sqliteBool(enabled),
+			NeedsUpdate:  !specMatches(spec, exe),
 		}
-		st.EnabledCodex = sqliteBool(enabled)
-		st.NeedsUpdate = !specMatches(spec, exe)
+		if !isStableID(id) {
+			candidate.LegacyID = protocol.MCPServerLegacyID
+			candidate.NeedsUpdate = true
+			legacy = &candidate
+			continue
+		}
+		st = candidate
+		legacy = nil
 		break
 	}
 	if err := rows.Err(); err != nil {
 		return classifyCCSwitchOpenErr(err)
 	}
+	if !st.Registered && legacy != nil {
+		st = *legacy
+	}
 	switch {
 	case !st.Registered:
 		st.NextStep = "可用 CC-Switch 快速导入（deep link）。导入完成后请重新检测。"
+	case st.LegacyID != "":
+		st.NextStep = "旧名称含空格，Codex 桌面会拒绝加载。请导入 grok_supervisor，并在 CC-Switch 删除旧的 Grok Supervisor。"
 	case st.NeedsUpdate:
 		st.NextStep = "deep link 不能更新已有 server_config。请复制更新 JSON，在 CC-Switch MCP 编辑页粘贴。"
 	default:
@@ -191,6 +205,24 @@ func (s *Service) OpenCCSwitchMCPImport(ctx context.Context) (protocol.MCPApplyR
 		return protocol.MCPApplyResult{
 			OK: true, Action: protocol.MCPActionUnchanged, Target: protocol.MCPTargetCCSwitch,
 			Message: "CC-Switch 已登记且配置匹配", NextStep: "可重新检测确认。不要再用 Direct 添加重复项。",
+		}, nil
+	}
+	if st.LegacyID != "" {
+		if !bundle.DeepLinkSupported {
+			return protocol.MCPApplyResult{
+				OK: false, Action: protocol.MCPActionFailed, Target: protocol.MCPTargetCCSwitch,
+				Message: "旧名称含空格，Codex 桌面无法加载", NextStep: "请复制 STDIO JSON，以 grok_supervisor 为名称导入，并删除旧的 Grok Supervisor。",
+			}, nil
+		}
+		if err := s.openURL(ctx, bundle.DeepLink); err != nil {
+			return protocol.MCPApplyResult{
+				OK: false, Action: protocol.MCPActionFailed, Target: protocol.MCPTargetCCSwitch,
+				Message: fmt.Sprintf("无法打开 CC-Switch：%v", err), NextStep: "请复制 JSON，以 grok_supervisor 为名称导入，并删除旧的 Grok Supervisor。",
+			}, nil
+		}
+		return protocol.MCPApplyResult{
+			OK: true, Action: protocol.MCPActionPendingUser, Target: protocol.MCPTargetCCSwitch, LiveEffective: false,
+			Message: "已打开 CC-Switch，待你导入有效名称", NextStep: "确认导入 grok_supervisor 后，删除旧的 Grok Supervisor，再重新检测并重启 Codex MCP server。",
 		}, nil
 	}
 	if st.Registered && st.NeedsUpdate {
