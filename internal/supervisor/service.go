@@ -36,6 +36,9 @@ type runtime struct {
 	promptCh      chan struct{}
 	term          terminal.Handle
 	waitCancel    context.CancelFunc
+	attaching     bool
+	attachDone    chan struct{}
+	attachErr     error
 	attachGen     uint64
 	gen           uint64
 	turnSeq       uint64

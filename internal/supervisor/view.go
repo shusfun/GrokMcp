@@ -114,7 +114,7 @@ func (s *Service) attachWhenIdle(jobID string, gen uint64) {
 	}
 }
 
-func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (protocol.Job, error) {
+func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (out protocol.Job, err error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -123,8 +123,34 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (protocol.Job
 	s.mu.Unlock()
 	rt := s.runtime(job.JobID)
 	s.mu.Lock()
+	if rt.attaching {
+		done := rt.attachDone
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return s.snapshot(job.JobID), ctx.Err()
+		case <-done:
+		}
+		s.mu.Lock()
+		attachErr := rt.attachErr
+		s.mu.Unlock()
+		return s.snapshot(job.JobID), attachErr
+	}
+	rt.attaching = true
+	rt.attachDone = make(chan struct{})
+	rt.attachErr = nil
+	done := rt.attachDone
 	existing := rt.term
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if rt.attachDone == done {
+			rt.attaching = false
+			rt.attachErr = err
+			close(done)
+		}
+		s.mu.Unlock()
+	}()
 	if existing != nil && s.handleAlive(existing) {
 		s.focusHandle(ctx, job.GrokSessionID, existing)
 		s.emitTerm(job, "info", "terminal.focused", "existing TUI focused", existing, true, "ok", "")
