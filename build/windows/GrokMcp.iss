@@ -6,10 +6,10 @@
   #define MyAppVersion "0.1.0"
 #endif
 #ifndef SourceDir
-  #define SourceDir "dist\windows-amd64"
+  #define SourceDir "..\..\dist\windows-amd64"
 #endif
 #ifndef OutputDir
-  #define OutputDir "dist"
+  #define OutputDir "..\..\dist"
 #endif
 
 [Setup]
