@@ -10,9 +10,12 @@ Download the asset for your machine from [Releases](https://github.com/shusfun/G
 | --- | --- |
 | `GrokMcp-*-darwin-amd64.dmg` | macOS Intel |
 | `GrokMcp-*-darwin-arm64.dmg` | macOS Apple Silicon |
-| `GrokMcp-*-windows-amd64.zip` | Windows x64 |
+| `GrokMcp-*-windows-amd64.exe` | Windows x64 installer |
+| `GrokMcp-*-windows-amd64.zip` | Windows x64 portable ZIP |
 
 macOS builds are ad-hoc signed and not notarized (no Apple Developer ID). Gatekeeper will warn on the first open after a download. Drag the app to Applications, then use **System Settings → Privacy & Security → Open Anyway**, or run `xattr -cr "/Applications/Grok Supervisor.app"`. The disk image also has `打开说明.txt` and `清除隔离属性.command`.
+
+On Windows, run the EXE installer to install the desktop app and shortcuts. Running the same installer again detects the existing installation and uninstalls it. The ZIP remains available as a portable build.
 
 Verify downloads with `SHA256SUMS.txt` on the same release:
 

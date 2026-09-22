@@ -64,13 +64,18 @@ jobs:
           pnpm test
           pnpm build
           go test ./...
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
       - name: Package Windows
         shell: bash
         run: sh scripts/package.sh windows
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/GrokMcp-*-windows-amd64.zip
+          path: |
+            dist/GrokMcp-*-windows-amd64.zip
+            dist/GrokMcp-*-windows-amd64.exe
           if-no-files-found: error
 
   release:

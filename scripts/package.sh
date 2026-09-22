@@ -119,6 +119,20 @@ with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zf:
 PY
 	fi
 	echo "wrote $zipfile"
+
+	installer="$DIST_DIR/${BIN_NAME}-${VERSION}-windows-amd64.exe"
+	rm -f "$installer"
+	iscc="${ISCC:-iscc}"
+	command -v "$iscc" >/dev/null 2>&1 || {
+		echo "Inno Setup compiler not found: $iscc" >&2
+		exit 1
+	}
+	"$iscc" "/DMyAppVersion=$VERSION" "/DSourceDir=$outdir" "/DOutputDir=$DIST_DIR" "build/windows/GrokMcp.iss"
+	[ -f "$installer" ] || {
+		echo "Inno Setup did not create $installer" >&2
+		exit 1
+	}
+	echo "wrote $installer"
 }
 
 stage_clean
