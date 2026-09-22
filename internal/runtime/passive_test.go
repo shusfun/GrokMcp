@@ -43,3 +43,4 @@ func TestIPCColdStartAndProbeDoNotLaunchAgent(t *testing.T) {
 		t.Fatalf("cold start/probe invoked agent %d times", a.calls.Load())
 	}
 }
+
