@@ -18,12 +18,12 @@ func TaskContract(cwd, title, userPrompt string) string {
 	b.WriteString("\nProtocol:\n")
 	b.WriteString("1. Start in plan mode. Investigate the repo, write plan.md in this session directory, then call exit_plan_mode.\n")
 	b.WriteString("2. Wait for Codex approval before implementing. After approval, implement, test, and fix in this same session.\n")
-	b.WriteString("3. Every turn MUST end with this exact block (no extra commentary after it):\n")
+	b.WriteString("3. Return the actual outcome and verification evidence. You may append this status block:\n")
 	b.WriteString(TaskStateOpen + "\n")
 	b.WriteString(`{"state":"working|needs_input|completed|blocked","summary":"...","next":"..."}` + "\n")
 	b.WriteString(TaskStateClose + "\n")
 	b.WriteString("4. state=working means continue automatically; needs_input pauses for Codex; completed is final for this job; blocked is a concrete blocker.\n")
-	b.WriteString("5. Do not stream process logs to Codex. Keep summaries short.\n\n")
+	b.WriteString("5. plan_ready is a native ACP approval event, never a text state. Missing status blocks are reviewed from your final answer; do not emit format-only repair turns. Do not stream process logs to Codex. Keep summaries short.\n\n")
 	b.WriteString("User task:\n")
 	b.WriteString(strings.TrimSpace(userPrompt))
 	b.WriteString("\n")
@@ -31,11 +31,7 @@ func TaskContract(cwd, title, userPrompt string) string {
 }
 
 func ContinuePrompt() string {
-	return "Continue the same job in this session. End this turn with " + TaskStateOpen + " … " + TaskStateClose + "."
-}
-
-func RepairPrompt() string {
-	return "Your last reply was missing the required " + TaskStateOpen + " block. Reply with only that block describing the current job state."
+	return "Continue the same job in this session. Reconcile existing work before acting; do not repeat completed side effects. Return the outcome and optionally append " + TaskStateOpen + " … " + TaskStateClose + "."
 }
 
 func ApprovePrompt(notes string) string {

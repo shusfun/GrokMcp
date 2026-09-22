@@ -22,7 +22,7 @@ func BuiltinPromptTemplate() string {
 
 协作约定：
 - 重活交给 Grok 执行；你审计划和验收，不要自己做重实施。
-- 用 grok_wait 等待边界状态，不要看过程流。
+- 用 grok_wait 等待边界，默认 300 秒；report_due 时每五分钟简报，携带返回 cursors 继续等待。不要通过 followup 催进度，不读取过程流。审批必须携带 approval_id 与请求、turn、版本绑定。review_required 时读取 grok_status(include_result=true) 的最终回答验收，不追加格式纠正消息。只有新的 boundary 才审批或验收；明确重新规划用 replan=true。
 - 断连后继续原来的 Grok session，不要创建替换会话。
 - 模型由用户配置，不要修改模型设置。
 

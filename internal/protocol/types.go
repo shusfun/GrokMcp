@@ -63,6 +63,27 @@ const (
 )
 
 type Job struct {
+	RequestPhase          string      `json:"request_phase,omitempty"`
+	ApprovalID            string      `json:"approval_id,omitempty"`
+	ApprovalConnectionID  string      `json:"approval_connection_id,omitempty"`
+	ApprovalSupportsNotes bool        `json:"approval_supports_notes"`
+	ApprovalDelivery      string      `json:"approval_delivery,omitempty"`
+	PauseReason           string      `json:"pause_reason,omitempty"`
+	ResultTurnID          string      `json:"result_turn_id,omitempty"`
+	Result                *ResultPage `json:"result,omitempty"`
+
+	AcceptedRequestID string   `json:"accepted_request_id,omitempty"`
+	QueuedRequestIDs  []string `json:"queued_request_ids,omitempty"`
+
+	RequestID      string    `json:"request_id,omitempty"`
+	Approved       bool      `json:"approved"`
+	PlanVersion    int64     `json:"plan_version,omitempty"`
+	PlanTurnID     string    `json:"plan_turn_id,omitempty"`
+	EventCursor    int64     `json:"event_cursor"`
+	LastActivityAt time.Time `json:"last_activity_at,omitempty"`
+	ActivityKind   string    `json:"activity_kind,omitempty"`
+	WaitReason     string    `json:"wait_reason,omitempty"`
+
 	JobID            string     `json:"job_id"`
 	CodexThreadID    string     `json:"codex_thread_id,omitempty"`
 	GrokSessionID    string     `json:"grok_session_id,omitempty"`
@@ -131,12 +152,18 @@ type DispatchResult struct {
 }
 
 type WaitRequest struct {
+	Cursors map[string]int64 `json:"cursors,omitempty" jsonschema:"per-job cursors returned by the previous wait; omit on first wait"`
+
 	JobIDs     []string `json:"job_ids"`
 	Mode       string   `json:"mode,omitempty"`
 	TimeoutSec int      `json:"timeout_sec,omitempty"`
 }
 
 type WaitResult struct {
+	Boundaries []Job            `json:"boundaries,omitempty"`
+	Reason     string           `json:"reason"`
+	Cursors    map[string]int64 `json:"cursors"`
+
 	Jobs []Job `json:"jobs"`
 }
 
@@ -149,12 +176,19 @@ const (
 )
 
 type PlanDecideRequest struct {
+	ApprovalID  string `json:"approval_id"`
+	RequestID   string `json:"request_id"`
+	TurnID      string `json:"turn_id"`
+	PlanVersion int64  `json:"plan_version"`
+
 	JobID  string       `json:"job_id"`
 	Decide PlanDecision `json:"decide"`
 	Notes  string       `json:"notes,omitempty"`
 }
 
 type FollowupRequest struct {
+	Replan bool `json:"replan,omitempty" jsonschema:"explicitly request a new plan in the original session"`
+
 	JobID  string `json:"job_id"`
 	Prompt string `json:"prompt"`
 }
@@ -404,4 +438,22 @@ type MCPApplyResult struct {
 	LiveEffective bool   `json:"live_effective"`
 	Message       string `json:"message"`
 	NextStep      string `json:"next_step,omitempty"`
+}
+
+// Offset/Limit 按 Unicode 字符计数，分页不切开 UTF-8 字符。
+type ResultQuery struct {
+	IncludeResult bool   `json:"include_result,omitempty"`
+	RequestID     string `json:"request_id,omitempty"`
+	TurnID        string `json:"turn_id,omitempty"`
+	Offset        int    `json:"offset,omitempty"`
+	Limit         int    `json:"limit,omitempty"`
+}
+type ResultPage struct {
+	RequestID  string `json:"request_id"`
+	TurnID     string `json:"turn_id"`
+	Text       string `json:"text"`
+	Offset     int    `json:"offset"`
+	NextOffset int    `json:"next_offset"`
+	Total      int    `json:"total"`
+	HasMore    bool   `json:"has_more"`
 }

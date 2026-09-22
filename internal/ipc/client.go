@@ -13,13 +13,15 @@ import (
 )
 
 type Client struct {
-	conn net.Conn
-	wmu  sync.Mutex
-	id   atomic.Uint64
-	pend sync.Map
-	subs map[int]func(protocol.Event)
-	smu  sync.Mutex
-	seq  int
+	conn   net.Conn
+	wmu    sync.Mutex
+	id     atomic.Uint64
+	pend   sync.Map
+	subs   map[int]func(protocol.Event)
+	smu    sync.Mutex
+	seq    int
+	done   chan struct{}
+	events chan protocol.Event
 }
 
 func Dial(ctx context.Context, network, addr string) (*Client, error) {
@@ -28,12 +30,14 @@ func Dial(ctx context.Context, network, addr string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	cl := &Client{conn: c, subs: map[int]func(protocol.Event){}}
+	cl := &Client{conn: c, subs: map[int]func(protocol.Event){}, done: make(chan struct{}), events: make(chan protocol.Event, 64)}
+	go cl.dispatchEvents()
 	go cl.read()
 	return cl, nil
 }
 
 func (c *Client) read() {
+	defer close(c.done)
 	sc := bufio.NewScanner(c.conn)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
@@ -44,11 +48,11 @@ func (c *Client) read() {
 		if resp.Method == "event" {
 			var ev protocol.Event
 			_ = json.Unmarshal(resp.Params, &ev)
-			c.smu.Lock()
-			for _, fn := range c.subs {
-				fn(ev)
+			// UI 通知可合并/丢弃；权威状态与等待边界从服务端补读。
+			select {
+			case c.events <- ev:
+			default:
 			}
-			c.smu.Unlock()
 			continue
 		}
 		if ch, ok := c.pend.LoadAndDelete(resp.ID); ok {
@@ -64,6 +68,7 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 	raw, _ := json.Marshal(req)
 	ch := make(chan Response, 1)
 	c.pend.Store(id, ch)
+	defer c.pend.Delete(id)
 	c.wmu.Lock()
 	_, err := c.conn.Write(append(raw, '\n'))
 	c.wmu.Unlock()
@@ -71,6 +76,8 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 		return nil, err
 	}
 	select {
+	case <-c.done:
+		return nil, errors.New("IPC disconnected")
 	case <-ctx.Done():
 		c.pend.Delete(id)
 		return nil, ctx.Err()
@@ -105,14 +112,25 @@ func (c *Client) PlanDecide(ctx context.Context, req protocol.PlanDecideRequest)
 func (c *Client) Followup(ctx context.Context, req protocol.FollowupRequest) (protocol.Job, error) {
 	return decode[protocol.Job](c.call(ctx, "followup", req))
 }
-func (c *Client) CancelTurn(ctx context.Context, jobID string) (protocol.Job, error) {
-	return decode[protocol.Job](c.call(ctx, "cancelTurn", map[string]string{"job_id": jobID}))
+func (c *Client) CancelTurn(ctx context.Context, jobID string, expectedTurnID ...string) (protocol.Job, error) {
+	turnID := ""
+	if len(expectedTurnID) > 0 {
+		turnID = expectedTurnID[0]
+	}
+	return decode[protocol.Job](c.call(ctx, "cancelTurn", map[string]string{"job_id": jobID, "turn_id": turnID}))
 }
 func (c *Client) SetView(ctx context.Context, req protocol.SetViewRequest) (protocol.Job, error) {
 	return decode[protocol.Job](c.call(ctx, "setView", req))
 }
-func (c *Client) Status(ctx context.Context, jobID string) (protocol.Job, error) {
-	return decode[protocol.Job](c.call(ctx, "status", map[string]string{"job_id": jobID}))
+func (c *Client) Status(ctx context.Context, jobID string, options ...protocol.ResultQuery) (protocol.Job, error) {
+	q := protocol.ResultQuery{}
+	if len(options) > 0 {
+		q = options[0]
+	}
+	return decode[protocol.Job](c.call(ctx, "status", struct {
+		JobID string `json:"job_id"`
+		protocol.ResultQuery
+	}{jobID, q}))
 }
 func (c *Client) ListJobs(ctx context.Context) ([]protocol.Job, error) {
 	return decode[[]protocol.Job](c.call(ctx, "listJobs", struct{}{}))
@@ -243,3 +261,22 @@ func (c *Client) SetMCPConnected(v bool) {
 }
 
 func (c *Client) Close() error { return c.conn.Close() }
+
+func (c *Client) dispatchEvents() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case ev := <-c.events:
+			c.smu.Lock()
+			fns := make([]func(protocol.Event), 0, len(c.subs))
+			for _, fn := range c.subs {
+				fns = append(fns, fn)
+			}
+			c.smu.Unlock()
+			for _, fn := range fns {
+				fn(ev)
+			}
+		}
+	}
+}

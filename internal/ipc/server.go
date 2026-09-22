@@ -49,6 +49,16 @@ func (s *Server) loop() {
 
 func (s *Server) handle(c net.Conn) {
 	defer c.Close()
+	defer func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for i, conn := range s.cons {
+			if conn == c {
+				s.cons = append(s.cons[:i], s.cons[i+1:]...)
+				break
+			}
+		}
+	}()
 	var wmu sync.Mutex
 	write := func(v Response) {
 		b, _ := json.Marshal(v)
@@ -56,8 +66,24 @@ func (s *Server) handle(c net.Conn) {
 		_, _ = c.Write(append(b, '\n'))
 		wmu.Unlock()
 	}
+	events := make(chan protocol.Event, 64)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case ev := <-events:
+				write(Response{Method: "event", Params: mustJSON(ev)})
+			}
+		}
+	}()
 	off := s.svc.Subscribe(func(ev protocol.Event) {
-		write(Response{Method: "event", Params: mustJSON(ev)})
+		select {
+		case events <- ev:
+		default:
+		}
 	})
 	defer off()
 	sc := bufio.NewScanner(c)
@@ -115,12 +141,13 @@ func (s *Server) dispatch(ctx context.Context, req Request) (json.RawMessage, er
 		return marshal(out, err)
 	case "cancelTurn":
 		var in struct {
-			JobID string `json:"job_id"`
+			TurnID string `json:"turn_id,omitempty"`
+			JobID  string `json:"job_id"`
 		}
 		if err := json.Unmarshal(req.Params, &in); err != nil {
 			return nil, err
 		}
-		out, err := s.svc.CancelTurn(ctx, in.JobID)
+		out, err := s.svc.CancelTurn(ctx, in.JobID, in.TurnID)
 		return marshal(out, err)
 	case "setView":
 		var in protocol.SetViewRequest
@@ -131,10 +158,11 @@ func (s *Server) dispatch(ctx context.Context, req Request) (json.RawMessage, er
 		return marshal(out, err)
 	case "status":
 		var in struct {
+			protocol.ResultQuery
 			JobID string `json:"job_id"`
 		}
 		_ = json.Unmarshal(req.Params, &in)
-		out, err := s.svc.Status(ctx, in.JobID)
+		out, err := s.svc.Status(ctx, in.JobID, in.ResultQuery)
 		return marshal(out, err)
 	case "listJobs":
 		out, err := s.svc.ListJobs(ctx)

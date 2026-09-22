@@ -3,9 +3,12 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"github.com/google/uuid"
+	"strings"
 
 	"grokmcp/internal/agent"
 	"grokmcp/internal/protocol"
+	"grokmcp/internal/store"
 )
 
 var (
@@ -34,84 +37,64 @@ func (s *Service) applyPromptResult(jobID string, item queued, res agent.PromptR
 		return
 	}
 	job := rec.Job
-	if res.LastAction != "" {
-		job.LastAction = res.LastAction
-	}
-	if res.StopReason == "cancelled" {
-		if job.UserCancelled {
-			job.State = protocol.StateCancelled
-			job.LastAction = "Cancelled"
-			s.touch(&job)
-			_ = s.store.AddEvent(job.JobID, string(protocol.StateCancelled), "cancelled", s.clock.Now())
-			s.save(job)
-			return
-		}
-	}
-
-	if res.PlanReady && (job.State == protocol.StatePlanning || job.State == protocol.StateStarting || job.State == protocol.StatePlanReady) {
-		s.becomePlanReady(job, res.Text)
+	if job.UserCancelled {
 		return
 	}
-
-	ts, ok := protocol.ParseTaskState(res.Text)
-	if !ok {
-		if item.kind == "plan" && job.State == protocol.StateExecuting {
-			s.touch(&job)
-			s.save(job)
-			return
-		}
-		missing := rec.MissingMarkerCount + 1
-		if item.repair {
-			job.State = protocol.StateNeedsInput
-			job.LastSummary = "missing GROK_TASK_STATE"
-			job.LastAction = "Needs input"
-			s.touch(&job)
-			_ = s.put(job, missing, rec.RecoverFails)
-			_ = s.store.AddEvent(job.JobID, string(protocol.StateNeedsInput), job.LastSummary, s.clock.Now())
-			s.emit(job)
-			return
-		}
-		_ = s.put(job, missing, rec.RecoverFails)
-		s.enqueue(jobID, queued{kind: "repair", text: protocol.RepairPrompt(), repair: true})
-		return
+	job.ActiveTurnID = ""
+	job.ResultTurnID = item.turnID
+	job.PauseReason = ""
+	if job.ApprovalDelivery == "submitted" {
+		job.ApprovalDelivery = "confirmed"
 	}
-
-	job.LastSummary = ts.Summary
-	switch ts.State {
-	case protocol.MarkerWorking:
-		if job.State == protocol.StatePlanning || job.State == protocol.StatePlanReady {
-			job.State = protocol.StateExecuting
-		} else if job.State != protocol.StateCancelled {
-			job.State = protocol.StateExecuting
-		}
-		job.LastAction = firstNonEmpty(res.LastAction, "Working")
-		s.touch(&job)
-		_ = s.put(job, 0, rec.RecoverFails)
-		s.emit(job)
-		if job.ViewMode != protocol.ViewHeaded {
-			s.enqueue(jobID, queued{kind: "continue", text: protocol.ContinuePrompt()})
-		}
-	case protocol.MarkerNeedsInput:
+	s.mu.Lock()
+	rt := s.rt[jobID]
+	pending := len(rt.queue) > 0
+	job.LastActivityAt = rt.lastActivity
+	job.ActivityKind = rt.activityKind
+	s.mu.Unlock()
+	ts, marked := protocol.ParseTaskState(res.Text)
+	if !marked {
 		job.State = protocol.StateNeedsInput
-		job.LastAction = "Needs input"
-		s.touch(&job)
-		_ = s.put(job, 0, rec.RecoverFails)
-		_ = s.store.AddEvent(job.JobID, string(protocol.StateNeedsInput), ts.Summary, s.clock.Now())
-		s.emit(job)
-	case protocol.MarkerCompleted:
-		job.State = protocol.StateCompleted
-		job.LastAction = firstNonEmpty(res.LastAction, "Completed")
-		s.touch(&job)
-		_ = s.put(job, 0, rec.RecoverFails)
-		_ = s.store.AddEvent(job.JobID, string(protocol.StateCompleted), ts.Summary, s.clock.Now())
-		s.emit(job)
-	case protocol.MarkerBlocked:
-		job.State = protocol.StateBlocked
-		job.LastAction = "Blocked"
-		s.touch(&job)
-		_ = s.put(job, 0, rec.RecoverFails)
-		_ = s.store.AddEvent(job.JobID, string(protocol.StateBlocked), ts.Summary, s.clock.Now())
-		s.emit(job)
+		job.PauseReason = "review_required"
+		job.LastAction = "最终回答待验收"
+		job.LastSummary = "本轮已返回最终回答，请读取当前请求结果并验收"
+	} else {
+		job.LastSummary = ts.Summary
+		switch ts.State {
+		case protocol.MarkerWorking:
+			job.State = protocol.StateExecuting
+			job.LastAction = "Working"
+		case protocol.MarkerNeedsInput:
+			job.State = protocol.StateNeedsInput
+			job.LastAction = "Needs input"
+		case protocol.MarkerBlocked:
+			job.State = protocol.StateBlocked
+			job.LastAction = "Blocked"
+		case protocol.MarkerCompleted:
+			job.State = protocol.StateCompleted
+			job.LastAction = "Completed"
+		}
+	}
+	resultState := job.State
+	if job.State == protocol.StateCompleted && pending {
+		job.State = protocol.StateExecuting
+		job.LastAction = "Queued"
+		job.LastSummary = "当前请求已完成，等待处理下一请求"
+	}
+	s.touch(&job)
+	rec.Job = job
+	rec.RequestPhase = "returned"
+	rec.MissingMarkerCount = 0
+	rec.Result = &store.RequestResult{RequestID: item.requestID, TurnID: item.turnID, Summary: ts.Summary, Text: res.Text, StopReason: res.StopReason, State: resultState}
+	if err := s.store.PutJob(rec); err != nil {
+		s.persistenceFailed(jobID, err)
+		return
+	}
+	s.emit(job)
+	if marked && ts.State == protocol.MarkerWorking && job.InputOwner != protocol.OwnerTUI {
+		if err := s.enqueue(jobID, queued{kind: "continue", text: protocol.ContinuePrompt(), requestID: item.requestID}); err != nil {
+			s.persistenceFailed(jobID, err)
+		}
 	}
 }
 
@@ -121,23 +104,57 @@ func (s *Service) Followup(ctx context.Context, req protocol.FollowupRequest) (p
 		return protocol.Job{}, err
 	}
 	defer finish()
+	if strings.TrimSpace(req.Prompt) == "" {
+		return protocol.Job{}, errors.New("prompt is required")
+	}
+	rt := s.runtime(req.JobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
 	job, err := s.load(req.JobID)
 	if err != nil {
 		return protocol.Job{}, err
 	}
 	if job.State == protocol.StateCancelled {
-		return s.decorate(job), nil
+		return s.decorate(job), errJobInactive
 	}
-	if job.State == protocol.StatePlanReady {
+	if job.State == protocol.StatePlanReady && job.PauseReason != "approval_expired" {
 		return s.decorate(job), errPlanPending
 	}
-	if job.State == protocol.StateNeedsInput || job.State == protocol.StateBlocked || job.State == protocol.StateDisconnected || job.State == protocol.StateCompleted || job.State == protocol.StateFailed {
+	requestID := uuid.NewString()
+	planning := req.Replan || !job.Approved
+	s.mu.Lock()
+	busy := rt.busy
+	s.mu.Unlock()
+	if !busy {
+		job.RequestID = requestID
+		job.LastSummary = ""
+		job.LastAction = "Accepted"
+		job.PauseReason = ""
+		job.ResultTurnID = ""
 		job.State = protocol.StateExecuting
+		if planning {
+			job.State = protocol.StatePlanning
+			job.Approved = false
+			job.PlanSummary = ""
+			job.PlanDigest = ""
+		}
+		s.touch(&job)
+
 	}
-	s.touch(&job)
-	s.save(job)
-	s.enqueue(req.JobID, queued{connect: true, kind: "followup", text: req.Prompt})
-	return s.snapshot(req.JobID), nil
+	text := req.Prompt
+	if planning {
+		text = protocol.TaskContract(job.Cwd, job.Title, req.Prompt)
+	}
+	accepted := (*protocol.Job)(nil)
+	if !busy {
+		accepted = &job
+	}
+	if err := s.enqueue(req.JobID, queued{acceptedJob: accepted, connect: true, kind: "followup", text: text, requestID: requestID, planning: planning}); err != nil {
+		return protocol.Job{}, err
+	}
+	out := s.snapshot(req.JobID)
+	out.AcceptedRequestID = requestID
+	return out, nil
 }
 
 func (s *Service) Continue(ctx context.Context, jobID string) (protocol.Job, error) {
@@ -146,6 +163,9 @@ func (s *Service) Continue(ctx context.Context, jobID string) (protocol.Job, err
 		return protocol.Job{}, err
 	}
 	defer finish()
+	rt := s.runtime(jobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
 	job, err := s.load(jobID)
 	if err != nil {
 		return protocol.Job{}, err
@@ -153,15 +173,46 @@ func (s *Service) Continue(ctx context.Context, jobID string) (protocol.Job, err
 	if !acceptsTurnControl(job) {
 		return protocol.Job{}, errJobInactive
 	}
-	if job.State == protocol.StatePlanReady {
+	if job.State == protocol.StatePlanReady && job.PauseReason != "approval_expired" {
 		return s.decorate(job), errPlanPending
 	}
-	if job.State == protocol.StateNeedsInput || job.State == protocol.StateBlocked || job.State == protocol.StateDisconnected || job.State == protocol.StateCompleted || job.State == protocol.StateFailed {
-		job.State = protocol.StateExecuting
+	planning := !job.Approved || job.ApprovalDelivery == "unknown" || job.PauseReason == "approval_expired"
+	text := protocol.ContinuePrompt()
+	if prior, e := s.store.Request(jobID, job.RequestID); e == nil && (prior.Phase == "queued" || prior.Phase == "preparing") {
+		text = prior.Prompt
+		planning = prior.Planning
 	}
+	if planning {
+		text = "Resume this original session. Reconcile work already performed; do not repeat side effects. Present the existing or revised plan using the native exit_plan_mode approval request before implementation.\n" + text
+	}
+	job.State = protocol.StateExecuting
+	if planning {
+		job.State = protocol.StatePlanning
+		job.Approved = false
+	}
+	job.PauseReason = ""
+	job.ApprovalDelivery = ""
 	s.touch(&job)
-	s.save(job)
-	s.enqueue(jobID, queued{connect: true, kind: "continue", text: protocol.ContinuePrompt()})
+	s.mu.Lock()
+	restore := len(rt.queue) == 0 && (!rt.busy || rt.cancelledTurn)
+	s.mu.Unlock()
+	pending, err := s.store.QueuedRequests(jobID)
+	if err != nil {
+		return protocol.Job{}, err
+	}
+	if err := s.enqueue(jobID, queued{acceptedJob: &job, connect: true, kind: "continue", text: text, requestID: job.RequestID, planning: planning}); err != nil {
+		return protocol.Job{}, err
+	}
+
+	if restore {
+		for _, r := range pending {
+			if r.RequestID != job.RequestID {
+				if err := s.enqueue(jobID, queued{connect: true, kind: "followup", text: r.Prompt, requestID: r.RequestID, planning: r.Planning}); err != nil {
+					return protocol.Job{}, err
+				}
+			}
+		}
+	}
 	return s.snapshot(jobID), nil
 }
 

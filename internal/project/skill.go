@@ -12,7 +12,7 @@ import (
 const (
 	SkillRel     = ".agents/skills/grok-supervisor-tools/SKILL.md"
 	SkillDirRel  = ".agents/skills/grok-supervisor-tools"
-	SkillVersion = "1"
+	SkillVersion = "2"
 	markerPrefix = "<!-- grok-supervisor-tools managed version="
 	markerSuffix = " -->"
 )

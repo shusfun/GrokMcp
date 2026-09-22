@@ -39,11 +39,18 @@ func (s *Service) inspectWatchdog(now time.Time) {
 
 func (s *Service) checkJobStall(job protocol.Job, now time.Time) {
 	rt := s.runtime(job.JobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
+	if latest, err := s.load(job.JobID); err == nil {
+		job = latest
+	} else {
+		return
+	}
 	s.mu.Lock()
 	qlen := len(rt.queue)
 	busy := rt.busy
 	turnID := rt.turnID
-	h := rt.term
+
 	if rt.stallSince == nil {
 		rt.stallSince = map[string]time.Time{}
 	}
@@ -51,11 +58,11 @@ func (s *Service) checkJobStall(job protocol.Job, now time.Time) {
 
 	reason := ""
 	need := time.Duration(0)
-	live := h != nil && h.PID() > 0
+	live := s.liveGrok(job.JobID)
 	switch {
-	case qlen > 0 && !busy && job.InputOwner == protocol.OwnerSupervisor:
+	case qlen > 0 && !busy && job.InputOwner == protocol.OwnerSupervisor && job.State != protocol.StatePlanReady && job.PauseReason == "" && job.ApprovalDelivery != "unknown":
 		reason, need = "queue_nonempty_but_pump_idle", 5*time.Second
-	case qlen > 0 && job.ViewMode == protocol.ViewHeaded && job.InputOwner == protocol.OwnerTUI && !live:
+	case qlen > 0 && job.InputOwner == protocol.OwnerTUI && !live:
 		reason, need = "stale_tui_owner", 3*time.Second
 	case job.ViewMode == protocol.ViewDetaching:
 		reason, need = "detach_timeout", 3*time.Second
@@ -69,6 +76,11 @@ func (s *Service) checkJobStall(job protocol.Job, now time.Time) {
 		if rt.stalled {
 			rt.stalled = false
 			rt.stalledReason = ""
+			job.Stalled = false
+			job.StalledReason = ""
+			s.mu.Unlock()
+			s.save(job)
+			s.mu.Lock()
 		}
 		rt.stallSince = map[string]time.Time{}
 		return
@@ -89,6 +101,7 @@ func (s *Service) checkJobStall(job protocol.Job, now time.Time) {
 	job.Stalled = true
 	job.StalledReason = reason
 	s.mu.Unlock()
+	s.save(job)
 	s.emitTrace(job, "warn", trace.SourceSupervisor, "watchdog.stalled", reason, map[string]any{
 		"reason": reason, "queue_length": qlen, "busy": busy,
 	})

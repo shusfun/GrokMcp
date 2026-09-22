@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"sync"
 	"time"
 
@@ -15,6 +16,9 @@ type NewCall struct {
 }
 
 type Fake struct {
+	planHandler func(PlanRequest) error
+	approvals   map[string]PlanRequest
+
 	mu                   sync.Mutex
 	seq                  int
 	Sessions             map[string]string
@@ -34,8 +38,7 @@ type Fake struct {
 	LoadBlock            map[string]chan struct{}
 	LoadDelay            time.Duration
 	PlanReadyBeforeBlock string
-	planWait             map[string]chan bool
-	planFn               func(string, string)
+	planWait             map[string]chan planChoice
 	acpOK                bool
 }
 
@@ -44,7 +47,7 @@ func NewFake() *Fake {
 		Sessions:    map[string]string{},
 		PromptBlock: map[string]chan struct{}{},
 		LoadBlock:   map[string]chan struct{}{},
-		planWait:    map[string]chan bool{},
+		planWait:    map[string]chan planChoice{},
 		Mode:        "live",
 		acpOK:       true,
 		Diag: protocol.DiagnoseResult{
@@ -147,51 +150,98 @@ func (f *Fake) LoadConnectedSession(ctx context.Context, sessionID, cwd string) 
 }
 func (f *Fake) InvalidateSession(string) {}
 
-func (f *Fake) Prompt(ctx context.Context, sessionID, text string) (PromptResult, error) {
+func (f *Fake) Prompt(ctx context.Context, sid, text string) (PromptResult, error) {
 	f.mu.Lock()
 	f.Prompts = append(f.Prompts, text)
-	block := f.PromptBlock[sessionID]
-	fn := f.PromptFn
-	err := f.PromptErr
+	block, fn, err, excerpt := f.PromptBlock[sid], f.PromptFn, f.PromptErr, f.PlanReadyBeforeBlock
+	f.PlanReadyBeforeBlock = ""
 	f.mu.Unlock()
 	if err != nil {
 		return PromptResult{}, err
 	}
-	if block != nil {
-		f.mu.Lock()
-		hook := f.planFn
-		excerpt := f.PlanReadyBeforeBlock
-		if excerpt != "" {
-			f.PlanReadyBeforeBlock = ""
+	if excerpt != "" {
+		choice, err := f.awaitFakePlan(ctx, sid, excerpt, block)
+		if err != nil {
+			return PromptResult{}, err
 		}
-		f.mu.Unlock()
-		if excerpt != "" && hook != nil {
-			hook(sessionID, excerpt)
+		if choice.decide == protocol.PlanCancel {
+			return PromptResult{StopReason: "cancelled"}, nil
 		}
+		if choice.decide == protocol.PlanRevise {
+			text = protocol.RevisePrompt(choice.notes)
+		} else {
+			text = protocol.ApprovePrompt(choice.notes)
+		}
+	} else if block != nil {
 		select {
 		case <-ctx.Done():
-			return PromptResult{StopReason: "cancelled"}, ctx.Err()
+			return PromptResult{}, ctx.Err()
 		case <-block:
 		}
 	}
-	if ctx.Err() != nil {
-		return PromptResult{StopReason: "cancelled"}, ctx.Err()
-	}
-	if fn != nil {
-		res := fn(sessionID, text)
-		f.mu.Lock()
-		hook := f.planFn
-		f.mu.Unlock()
-		if res.PlanReady && hook != nil {
-			hook(sessionID, res.Text)
+	for {
+		if ctx.Err() != nil {
+			return PromptResult{}, ctx.Err()
 		}
-		return res, nil
+		res := PromptResult{Text: protocol.RenderTaskState(protocol.TaskState{State: protocol.MarkerCompleted, Summary: "done"}), StopReason: "end_turn"}
+		if fn != nil {
+			res = fn(sid, text)
+		}
+		if !res.PlanReady {
+			return res, nil
+		}
+		choice, err := f.awaitFakePlan(ctx, sid, res.Text, nil)
+		if err != nil {
+			return PromptResult{}, err
+		}
+		if choice.decide == protocol.PlanCancel {
+			return PromptResult{StopReason: "cancelled"}, nil
+		}
+		if choice.decide == protocol.PlanRevise {
+			text = protocol.RevisePrompt(choice.notes)
+		} else {
+			text = protocol.ApprovePrompt(choice.notes)
+		}
 	}
-	return PromptResult{
-		Text:       protocol.RenderTaskState(protocol.TaskState{State: protocol.MarkerCompleted, Summary: "done"}),
-		StopReason: "end_turn",
-		LastAction: "Idle",
-	}, nil
+}
+func (f *Fake) awaitFakePlan(ctx context.Context, sid, content string, block <-chan struct{}) (planChoice, error) {
+	p := PlanRequest{ID: uuid.NewString(), ConnectionID: "fake-connection", SessionID: sid, RequestID: RequestID(ctx), TurnID: TurnID(ctx), Content: content, SupportsNotes: true, CreatedAt: time.Now().UTC()}
+	ch := make(chan planChoice, 1)
+	f.mu.Lock()
+	if f.approvals == nil {
+		f.approvals = map[string]PlanRequest{}
+	}
+	f.approvals[p.ID] = p
+	f.planWait[sid] = ch
+	hook := f.planHandler
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		delete(f.approvals, p.ID)
+		if f.planWait[sid] == ch {
+			delete(f.planWait, sid)
+		}
+		f.mu.Unlock()
+	}()
+	if hook == nil {
+		return planChoice{}, fmt.Errorf("no plan handler")
+	}
+	if err := hook(p); err != nil {
+		return planChoice{}, err
+	}
+	if block != nil {
+		select {
+		case <-ctx.Done():
+			return planChoice{}, ctx.Err()
+		case <-block:
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return planChoice{}, ctx.Err()
+	case choice := <-ch:
+		return choice, nil
+	}
 }
 
 func (f *Fake) Cancel(_ context.Context, sessionID string) error {
@@ -207,14 +257,14 @@ func (f *Fake) Cancel(_ context.Context, sessionID string) error {
 	}
 	if ch, ok := f.planWait[sessionID]; ok {
 		select {
-		case ch <- false:
+		case ch <- planChoice{decide: protocol.PlanCancel}:
 		default:
 		}
 	}
 	return nil
 }
 
-func (f *Fake) ResolvePlan(_ context.Context, sessionID string, decide protocol.PlanDecision, _ string) error {
+func (f *Fake) resolveChoice(_ context.Context, sessionID string, decide protocol.PlanDecision, notes string) error {
 	f.mu.Lock()
 	f.Resolves = append(f.Resolves, sessionID+":"+string(decide))
 	ch := f.planWait[sessionID]
@@ -222,14 +272,12 @@ func (f *Fake) ResolvePlan(_ context.Context, sessionID string, decide protocol.
 	if ch == nil {
 		return ErrNoPlanPermission
 	}
-	ch <- decide == protocol.PlanApprove
+	select {
+	case ch <- planChoice{decide: decide, notes: notes}:
+	default:
+		return fmt.Errorf("plan decision already submitted")
+	}
 	return nil
-}
-
-func (f *Fake) SetPlanListener(fn func(string, string)) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.planFn = fn
 }
 
 func (f *Fake) Close() error {
@@ -237,7 +285,7 @@ func (f *Fake) Close() error {
 	defer f.mu.Unlock()
 	for _, ch := range f.planWait {
 		select {
-		case ch <- false:
+		case ch <- planChoice{decide: protocol.PlanCancel}:
 		default:
 		}
 	}
@@ -267,4 +315,34 @@ func (f *Fake) PromptCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.Prompts)
+}
+
+func (f *Fake) PlanSession(context.Context, string) error { return nil }
+
+func (f *Fake) SetPlanHandler(fn func(PlanRequest) error) {
+	f.mu.Lock()
+	f.planHandler = fn
+	f.mu.Unlock()
+}
+func (f *Fake) SetActivityHandler(func(Activity)) {}
+func (f *Fake) SetDisconnectListener(func())      {}
+func (f *Fake) PendingApproval(id string) (PlanRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.approvals[id]
+	if !ok {
+		return p, ErrNoPlanPermission
+	}
+	return p, nil
+}
+func (f *Fake) ResolveApproval(ctx context.Context, d PlanDecision) error {
+	f.mu.Lock()
+	p, ok := f.approvals[d.ID]
+	if !ok || p.TurnID != d.TurnID || p.RequestID != d.RequestID || p.ConnectionID != d.ConnectionID || p.SessionID != d.SessionID {
+		f.mu.Unlock()
+		return ErrNoPlanPermission
+	}
+	delete(f.approvals, d.ID)
+	f.mu.Unlock()
+	return f.resolveChoice(ctx, p.SessionID, d.Decide, d.Notes)
 }

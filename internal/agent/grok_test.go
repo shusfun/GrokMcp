@@ -16,7 +16,6 @@ func testGrok() *Grok {
 		last:    map[string]string{},
 		plan:    map[string]bool{},
 		pending: map[string]chan planChoice{},
-		arm:     map[string]planChoice{},
 	}
 }
 
@@ -127,7 +126,7 @@ func TestHandlePermissionRegistersPendingBeforeHook(t *testing.T) {
 	g := testGrok()
 	title := "Plan: Exit"
 	hookPending := make(chan bool, 1)
-	g.SetPlanListener(func(sid string, _ string) {
+	setTestPlanListener(g, func(sid string, _ string) {
 		g.mu.Lock()
 		_, ok := g.pending[sid]
 		g.mu.Unlock()
@@ -156,7 +155,7 @@ func TestHandlePermissionRegistersPendingBeforeHook(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("hook timeout")
 	}
-	if err := g.ResolvePlan(context.Background(), "s1", protocol.PlanApprove, ""); err != nil {
+	if err := resolveTestPlan(g, context.Background(), "s1", protocol.PlanApprove, ""); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -169,30 +168,18 @@ func TestHandlePermissionRegistersPendingBeforeHook(t *testing.T) {
 	}
 }
 
-func TestResolvePlanWithoutPendingArmsNextExit(t *testing.T) {
+func TestResolvePlanWithoutPendingDoesNotApproveFutureRequest(t *testing.T) {
 	g := testGrok()
-	err := g.ResolvePlan(context.Background(), "s1", protocol.PlanApprove, "")
-	if !errors.Is(err, ErrNoPlanPermission) {
-		t.Fatalf("err=%v", err)
-	}
-	hook := 0
-	g.SetPlanListener(func(string, string) { hook++ })
-	title := "Plan: Exit"
-	resp, err := g.handlePermission(context.Background(), acp.RequestPermissionRequest{
-		SessionId: "s1",
-		ToolCall:  acp.ToolCallUpdate{Title: &title},
-		Options: []acp.PermissionOption{
-			{Kind: acp.PermissionOptionKindAllowOnce, OptionId: "allow_once", Name: "Allow"},
-		},
-	})
-	if err != nil {
+	if err := resolveTestPlan(g, context.Background(), "s1", protocol.PlanApprove, ""); !errors.Is(err, ErrNoPlanPermission) {
 		t.Fatal(err)
 	}
-	if hook != 0 {
-		t.Fatalf("armed permission must not publish plan_ready, hook=%d", hook)
-	}
-	if resp.Outcome.Selected == nil || string(resp.Outcome.Selected.OptionId) != "allow_once" {
-		t.Fatalf("%+v", resp)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	called := false
+	setTestPlanListener(g, func(string, string) { called = true })
+	_, err := g.awaitPlanChoice(ctx, "s1", "")
+	if !called || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("future approval bypassed: called=%v err=%v", called, err)
 	}
 }
 
@@ -217,7 +204,7 @@ func TestExitPlanModeExtension(t *testing.T) {
 		t.Fatal(err)
 	}
 	excerpt := make(chan string, 1)
-	g.SetPlanListener(func(sid string, text string) {
+	setTestPlanListener(g, func(sid string, text string) {
 		g.mu.Lock()
 		_, ok := g.pending[sid]
 		g.mu.Unlock()
@@ -254,7 +241,7 @@ func TestExitPlanModeExtension(t *testing.T) {
 		t.Fatal("extension returned before ResolvePlan")
 	default:
 	}
-	if err := g.ResolvePlan(context.Background(), "s1", protocol.PlanApprove, "ship it"); err != nil {
+	if err := resolveTestPlan(g, context.Background(), "s1", protocol.PlanApprove, "ship it"); err != nil {
 		t.Fatal(err)
 	}
 	select {

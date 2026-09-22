@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"grokmcp/internal/core"
@@ -19,7 +20,7 @@ func Run(ctx context.Context, backend core.Backend) error {
 }
 
 const instructions = `可委派工作默认交给 Grok。Codex 审计划和验收。
-用 grok_wait 等待关键边界，不要读取或等待过程流。
+用 grok_wait 等待关键边界，默认 300 秒。report_due 是正常五分钟简报，简短汇报当前状态后携带返回 cursors 继续等待。boundary 才处理审批、输入、失败或验收。不要用 followup 催进度，不读取过程流；停止等待不会取消任务。
 断连或 Codex 重启后继续原来的 Grok session，不要创建替换会话。
 不要修改用户的模型或推理设置。`
 
@@ -35,26 +36,27 @@ func addTools(server *mcp.Server, backend core.Backend) {
 			out, err := backend.Dispatch(ctx, in)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "grok_wait", Description: "等待 any/all 任务到达关键边界；不返回过程输出。", Annotations: annWait},
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_wait", Description: "等待新的 any/all 边界，默认 300 秒。返回 boundary 或正常 report_due；下一次原样携带 cursors。常规活动不打断等待，不返回过程输出。", Annotations: annWait},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.WaitRequest) (*mcp.CallToolResult, protocol.WaitResult, error) {
 			out, err := backend.Wait(ctx, in)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "grok_plan_decide", Description: "批准、退回或取消 Plan。", Annotations: annExec},
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_plan_decide", Description: "批准、退回或取消真实原生审批；携带 approval_id 和请求/turn/方案版本。submitted 不等于 Grok 已确认执行，unknown 不自动重发。", Annotations: annExec},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.PlanDecideRequest) (*mcp.CallToolResult, protocol.Job, error) {
 			out, err := backend.PlanDecide(ctx, in)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "grok_followup", Description: "向同一 session 追加返工、继续或验收意见。", Annotations: annExec},
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_followup", Description: "向同一 session 追加新工作。replan=true 重新规划；默认沿用批准阶段，没有批准记录则先规划。不要用于催进度。", Annotations: annExec},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.FollowupRequest) (*mcp.CallToolResult, protocol.Job, error) {
 			out, err := backend.Followup(ctx, in)
 			return nil, out, err
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "grok_cancel_turn", Description: "取消当前 turn，保留 session 和排队状态。", Annotations: annCancelTurn},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			JobID string `json:"job_id" jsonschema:"job id"`
+			TurnID string `json:"turn_id,omitempty" jsonschema:"active_turn_id from the current job; rejects stale cancellation"`
+			JobID  string `json:"job_id" jsonschema:"job id"`
 		}) (*mcp.CallToolResult, protocol.Job, error) {
-			out, err := backend.CancelTurn(ctx, in.JobID)
+			out, err := backend.CancelTurn(ctx, in.JobID, in.TurnID)
 			return nil, out, err
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "grok_set_view", Description: "在 headless 与 headed 之间切换，不重建任务。", Annotations: annSetView},
@@ -62,13 +64,17 @@ func addTools(server *mcp.Server, backend core.Backend) {
 			out, err := backend.SetView(ctx, in)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "grok_status", Description: "返回阶段、显示状态、摘要和最近边界事件。", Annotations: annStatus},
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_status", Description: "返回当前状态；include_result=true 按 request_id 读取最终回答，分页 offset/limit 按 Unicode 字符计数，后续页固定返回的 turn_id。review_required 需要验收回答，不追加格式修复消息。", Annotations: annStatus},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+			protocol.ResultQuery
 			JobID string `json:"job_id,omitempty" jsonschema:"optional job id"`
 		}) (*mcp.CallToolResult, any, error) {
 			if in.JobID != "" {
-				job, err := backend.Status(ctx, in.JobID)
+				job, err := backend.Status(ctx, in.JobID, in.ResultQuery)
 				return nil, job, err
+			}
+			if in.IncludeResult || in.RequestID != "" || in.TurnID != "" {
+				return nil, nil, errors.New("job_id is required for result lookup")
 			}
 			jobs, err := backend.ListJobs(ctx)
 			return nil, jobs, err

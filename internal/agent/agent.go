@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"time"
 
 	"grokmcp/internal/protocol"
 )
@@ -33,10 +34,29 @@ type Agent interface {
 	LoadSession(ctx context.Context, sessionID, cwd string) error
 	LoadConnectedSession(ctx context.Context, sessionID, cwd string) error
 	InvalidateSession(sessionID string)
+	PlanSession(ctx context.Context, sessionID string) error
 	Prompt(ctx context.Context, sessionID, text string) (PromptResult, error)
 	Cancel(ctx context.Context, sessionID string) error
-	ResolvePlan(ctx context.Context, sessionID string, decide protocol.PlanDecision, notes string) error
-	SetPlanListener(fn func(sessionID, excerpt string))
+	PendingApproval(id string) (PlanRequest, error)
+	ResolveApproval(ctx context.Context, req PlanDecision) error
+	SetPlanHandler(func(PlanRequest) error)
+	SetActivityHandler(func(Activity))
+	SetDisconnectListener(func())
 	AttachMode() string
 	Close() error
+}
+
+type PlanRequest struct {
+	ID, ConnectionID, SessionID, RequestID, TurnID, Content string
+	SupportsNotes                                           bool
+	CreatedAt                                               time.Time
+}
+type PlanDecision struct {
+	PlanRequest
+	Decide protocol.PlanDecision
+	Notes  string
+}
+type Activity struct {
+	ConnectionID, SessionID, RequestID, TurnID, Kind string
+	At                                               time.Time
 }

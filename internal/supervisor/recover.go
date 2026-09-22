@@ -34,13 +34,30 @@ func (s *Service) markAwaitingResume(jobID string) error {
 	if job.UserCancelled {
 		return nil
 	}
+	if job.State == protocol.StatePlanReady {
+		job.PauseReason = "approval_expired"
+		job.ApprovalDelivery = "expired"
+	}
+	if job.ApprovalDelivery == "submitted" {
+		job.ApprovalDelivery = "unknown"
+		job.PauseReason = "approval_delivery_unknown"
+		job.Approved = false
+	}
 	active := job.State.IsActive() || job.State == protocol.StateDisconnected
-	if !active && job.ViewMode == protocol.ViewHeadless && job.DesiredViewMode == protocol.ViewHeadless && job.InputOwner == protocol.OwnerSupervisor {
+	if !active && job.State != protocol.StatePlanReady && job.ViewMode == protocol.ViewHeadless && job.DesiredViewMode == protocol.ViewHeadless && job.InputOwner == protocol.OwnerSupervisor {
 		return nil
 	}
 	if active {
 		job.State = protocol.StateDisconnected
 		job.LastAction = "等待手动恢复"
+		if job.PauseReason == "" {
+			switch job.RequestPhase {
+			case "queued", "preparing":
+				job.PauseReason = "request_not_sent"
+			default:
+				job.PauseReason = "execution_unknown"
+			}
+		}
 	}
 	job.ViewMode = protocol.ViewHeadless
 	job.DesiredViewMode = protocol.ViewHeadless
@@ -59,6 +76,12 @@ func (s *Service) Disconnect(jobID string) {
 }
 
 func (s *Service) disconnectWithError(jobID, reason string) {
+	rt := s.runtime(jobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
+	s.disconnectLocked(jobID, reason)
+}
+func (s *Service) disconnectLocked(jobID, reason string) {
 	job, err := s.load(jobID)
 	if err != nil || job.UserCancelled {
 		return
@@ -66,6 +89,7 @@ func (s *Service) disconnectWithError(jobID, reason string) {
 	rt := s.runtime(jobID)
 	s.mu.Lock()
 	rt.gen++
+	rt.cancelledTurn = true
 	rt.queue = nil
 	if rt.cancel != nil {
 		rt.cancel()
@@ -90,9 +114,16 @@ func (s *Service) disconnectWithError(jobID, reason string) {
 	if job.State != protocol.StatePlanReady {
 		job.State = protocol.StateDisconnected
 	}
+	if job.ApprovalDelivery == "submitted" {
+		job.ApprovalDelivery = "unknown"
+		job.PauseReason = "approval_delivery_unknown"
+		job.Approved = false
+	} else if job.State == protocol.StatePlanReady {
+		job.ApprovalDelivery = "expired"
+		job.PauseReason = "approval_expired"
+	}
 	job.LastAction = "连接已断开，请手动继续"
 	job.LastSummary = reason
 	s.touch(&job)
-	_ = s.store.AddEvent(jobID, string(protocol.StateDisconnected), job.LastAction, s.clock.Now())
 	s.save(job)
 }

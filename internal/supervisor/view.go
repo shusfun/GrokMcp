@@ -29,7 +29,7 @@ func (s *Service) SetView(ctx context.Context, req protocol.SetViewRequest) (pro
 		s.mu.Unlock()
 		job.DesiredViewMode = protocol.ViewHeaded
 		s.touch(&job)
-		s.save(job)
+		s.saveView(job)
 		s.emitTrace(job, "info", trace.SourceSupervisor, "view.attach.requested", "headed requested", nil)
 		return s.attach(ctx, job)
 	case protocol.ViewHeadless:
@@ -39,7 +39,7 @@ func (s *Service) SetView(ctx context.Context, req protocol.SetViewRequest) (pro
 		s.mu.Unlock()
 		job.DesiredViewMode = protocol.ViewHeadless
 		s.touch(&job)
-		s.save(job)
+		s.saveView(job)
 		s.emitTrace(job, "info", trace.SourceSupervisor, "view.detach.requested", "headless requested", nil)
 		return s.detach(ctx, job, false)
 	default:
@@ -65,7 +65,7 @@ func (s *Service) OpenTerminal(ctx context.Context, req protocol.OpenTerminalReq
 	rt.viewRequested = true
 	s.mu.Unlock()
 	job.DesiredViewMode = protocol.ViewHeaded
-	s.save(job)
+	s.saveView(job)
 	_, err = s.attach(ctx, job)
 	return err
 }
@@ -110,7 +110,7 @@ func (s *Service) attach(ctx context.Context, job protocol.Job) (protocol.Job, e
 	if !s.attachAllowed(job) {
 		job.ViewMode = protocol.ViewAttaching
 		s.touch(&job)
-		s.save(job)
+		s.saveView(job)
 		rt := s.runtime(job.JobID)
 		s.mu.Lock()
 		rt.attachGen++
@@ -259,7 +259,7 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (out protocol
 	}
 	job.ViewMode = protocol.ViewAttaching
 	s.touch(&job)
-	s.save(job)
+	s.saveView(job)
 	s.emitTerm(job, "info", "terminal.opened", "opening TUI", nil, false, "", "")
 	s.agent.InvalidateSession(job.GrokSessionID)
 	h, err := s.term.OpenResume(ctx, s.grokPath(), job.GrokSessionID, job.Cwd)
@@ -287,7 +287,7 @@ func (s *Service) failHeadless(job protocol.Job, err error) (protocol.Job, error
 	rt.viewRequested = false
 	s.mu.Unlock()
 	s.touch(&job)
-	s.save(job)
+	s.saveView(job)
 	return s.decorate(job), err
 }
 
@@ -444,7 +444,7 @@ func (s *Service) markHeaded(job protocol.Job) protocol.Job {
 	job.ViewMode = protocol.ViewHeaded
 	job.InputOwner = protocol.OwnerTUI
 	s.touch(&job)
-	s.save(job)
+	s.saveView(job)
 	s.emitTrace(job, "info", trace.SourceSupervisor, "view.attached", "TUI attached", nil)
 	return s.snapshot(job.JobID)
 }
@@ -470,14 +470,14 @@ func (s *Service) detach(_ context.Context, job protocol.Job, fromClose bool) (p
 		if job.DesiredViewMode != protocol.ViewHeadless {
 			job.DesiredViewMode = protocol.ViewHeadless
 			s.touch(&job)
-			s.save(job)
+			s.saveView(job)
 		}
 		return s.decorate(job), nil
 	}
 	job.DesiredViewMode = protocol.ViewHeadless
 	job.ViewMode = protocol.ViewDetaching
 	s.touch(&job)
-	s.save(job)
+	s.saveView(job)
 	rt := s.runtime(job.JobID)
 	s.mu.Lock()
 	h := rt.term
@@ -517,7 +517,7 @@ func (s *Service) finishDetach(jobID string, h terminal.Handle, gen uint64) {
 		job.InputOwner = protocol.OwnerTUI
 		job.LastAction = "查看窗口已关闭，交互会话继续在后台运行"
 		s.touch(&job)
-		s.save(job)
+		s.saveView(job)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -558,7 +558,7 @@ func (s *Service) finishDetach(jobID string, h terminal.Handle, gen uint64) {
 	job.ViewMode = protocol.ViewHeadless
 	job.InputOwner = protocol.OwnerSupervisor
 	s.touch(&job)
-	s.save(job)
+	s.saveView(job)
 	s.emitTrace(job, "info", trace.SourceSupervisor, "view.detached", "input returned to supervisor", nil)
 	s.kick(job.JobID)
 }

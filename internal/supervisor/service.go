@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"strings"
 	"sync"
@@ -22,15 +23,26 @@ import (
 var errNotFound = errors.New("job not found")
 
 type queued struct {
-	connect bool
-	kind    string
-	text    string
-	repair  bool
-	gen     uint64
-	turnID  string
+	acceptedJob *protocol.Job
+	connect     bool
+	kind        string
+	text        string
+	gen         uint64
+	turnID      string
+	requestID   string
+	planning    bool
 }
 
 type runtime struct {
+	controlPending   bool
+	turnStartedAt    time.Time
+	planFileDigest   string
+	cancelledTurn    bool
+	sessionID        string
+	coord            sync.Mutex
+	requestID        string
+	lastActivity     time.Time
+	activityKind     string
 	viewRequested    bool
 	workerGeneration string
 	busy             bool
@@ -52,6 +64,7 @@ type runtime struct {
 }
 
 type Service struct {
+	planPath func(string, string) string
 	store    *store.Store
 	agent    agent.Agent
 	term     terminal.Launcher
@@ -84,16 +97,25 @@ func New(st *store.Store, ag agent.Agent, term terminal.Launcher, clk clock.Cloc
 		idg = ids.UUID{}
 	}
 	s := &Service{
-		store: st, agent: ag, term: term, clock: clk, ids: idg,
+		store: st, agent: ag, term: term, clock: clk, ids: idg, planPath: planFilePath,
 		rt: map[string]*runtime{}, subs: map[int]func(protocol.Event){},
 		grokPath: func() string { return "grok" }, stopWatch: make(chan struct{}),
 	}
 	if ag != nil {
-		ag.SetPlanListener(func(sessionID, excerpt string) { s.onPlanReady(sessionID, excerpt) })
+		ag.SetPlanHandler(s.onApproval)
+		ag.SetActivityHandler(func(ev agent.Activity) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			for _, rt := range s.rt {
+				if rt.sessionID == ev.SessionID && rt.requestID == ev.RequestID && rt.turnID == ev.TurnID && rt.busy && !rt.cancelledTurn {
+					rt.lastActivity = ev.At
+					rt.activityKind = ev.Kind
+				}
+			}
+		})
+		ag.SetDisconnectListener(s.connectionLost)
 	}
-	if a, ok := ag.(interface{ SetDisconnectListener(func()) }); ok {
-		a.SetDisconnectListener(s.connectionLost)
-	}
+
 	if t, ok := term.(interface{ SetWorkerExitListener(func(string, string)) }); ok {
 		t.SetWorkerExitListener(s.terminalWorkerExited)
 	}
@@ -278,12 +300,12 @@ func (s *Service) Dispatch(ctx context.Context, req protocol.DispatchRequest) (p
 		}
 		now := s.clock.Now()
 		job := protocol.Job{
-			JobID: s.ids.JobID(), CodexThreadID: task.CodexThreadID, Cwd: cwd, ProjectID: proj.ProjectID,
+			JobID: s.ids.JobID(), RequestID: uuid.NewString(), CodexThreadID: task.CodexThreadID, Cwd: cwd, ProjectID: proj.ProjectID,
 			Project: proj.Name, Title: title, State: protocol.StateCreated,
 			ViewMode: protocol.ViewHeadless, DesiredViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor,
 			CreatedAt: now, UpdatedAt: now,
 		}
-		if err := s.put(job, 0, nil); err != nil {
+		if err := s.store.PutJob(store.Record{Job: job, Accepted: &store.WorkRequest{RequestID: job.RequestID, Prompt: protocol.TaskContract(job.Cwd, job.Title, task.Prompt), Planning: true}}); err != nil {
 			return protocol.DispatchResult{}, err
 		}
 		job = s.startJob(ctx, job, task)
@@ -293,10 +315,36 @@ func (s *Service) Dispatch(ctx context.Context, req protocol.DispatchRequest) (p
 }
 
 func (s *Service) startJob(ctx context.Context, job protocol.Job, task protocol.DispatchTask) protocol.Job {
+	rt := s.runtime(job.JobID)
+	rt.coord.Lock()
+	gen := s.currentGen(job.JobID)
 	job.State = protocol.StateStarting
 	s.touch(&job)
-	_ = s.put(job, 0, nil)
+	if err := s.put(job, 0, nil); err != nil {
+		rt.coord.Unlock()
+		s.persistenceFailed(job.JobID, err)
+		return s.snapshot(job.JobID)
+	}
+	rt.coord.Unlock()
 	sid, cwd, err := s.agent.NewSession(ctx, job.Cwd, task.Worktree)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
+	s.mu.Lock()
+	superseded := rt.gen != gen || s.closed
+	s.mu.Unlock()
+	if superseded {
+		if current, e := s.load(job.JobID); e == nil {
+			if sid != "" {
+				current.GrokSessionID = sid
+				if cwd != "" {
+					current.Cwd = cwd
+				}
+				s.save(current)
+			}
+			return s.decorate(current)
+		}
+		return s.snapshot(job.JobID)
+	}
 	if err != nil {
 		return s.fail(job, err.Error())
 	}
@@ -308,9 +356,12 @@ func (s *Service) startJob(ctx context.Context, job protocol.Job, task protocol.
 	job.LastAction = "Planning"
 	job.DesiredViewMode = protocol.ViewHeadless
 	s.touch(&job)
-	_ = s.put(job, 0, nil)
+	if err := s.put(job, 0, nil); err != nil {
+		s.persistenceFailed(job.JobID, err)
+		return s.snapshot(job.JobID)
+	}
 	s.emitTrace(job, "info", trace.SourceSupervisor, "job.created", "job started", nil)
-	s.enqueue(job.JobID, queued{kind: "plan", text: protocol.TaskContract(job.Cwd, job.Title, task.Prompt)})
+	s.enqueue(job.JobID, queued{kind: "plan", planning: true, requestID: job.RequestID, text: protocol.TaskContract(job.Cwd, job.Title, task.Prompt)})
 	return s.snapshot(job.JobID)
 }
 
@@ -326,12 +377,27 @@ func (s *Service) ListJobs(context.Context) ([]protocol.Job, error) {
 	return out, nil
 }
 
-func (s *Service) Status(_ context.Context, jobID string) (protocol.Job, error) {
+func (s *Service) Status(_ context.Context, jobID string, options ...protocol.ResultQuery) (protocol.Job, error) {
+	rt := s.runtime(jobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
 	j, err := s.load(jobID)
 	if err != nil {
 		return protocol.Job{}, err
 	}
-	return s.decorate(j), nil
+	out := s.decorate(j)
+	if len(options) > 0 && options[0].IncludeResult {
+		q := options[0]
+		if q.RequestID == "" {
+			q.RequestID = j.RequestID
+		}
+		page, err := s.store.Result(jobID, q)
+		if err != nil {
+			return protocol.Job{}, err
+		}
+		out.Result = &page
+	}
+	return out, nil
 }
 
 func (s *Service) Events(_ context.Context, jobID string) ([]protocol.BoundaryEvent, error) {
@@ -439,17 +505,27 @@ func (s *Service) put(job protocol.Job, missing int, fails []int64) error {
 	if job.Project == "" {
 		job.Project = textutil.ProjectName(job.Cwd)
 	}
+	s.mu.Lock()
+	if rt := s.rt[job.JobID]; rt != nil {
+		job.LastActivityAt = rt.lastActivity
+		job.ActivityKind = rt.activityKind
+		job.ActiveTurnID = rt.turnID
+	}
+	s.mu.Unlock()
 	return s.store.PutJob(store.Record{Job: job, MissingMarkerCount: missing, RecoverFails: fails})
 }
 
-func (s *Service) save(job protocol.Job) {
+func (s *Service) save(job protocol.Job) error {
 	rec, err := s.store.GetJob(job.JobID)
-	missing, fails := 0, []int64(nil)
-	if err == nil {
-		missing, fails = rec.MissingMarkerCount, rec.RecoverFails
+	if err != nil {
+		return err
 	}
-	_ = s.put(job, missing, fails)
+	if err := s.put(job, rec.MissingMarkerCount, rec.RecoverFails); err != nil {
+		s.persistenceFailed(job.JobID, err)
+		return err
+	}
 	s.emit(job)
+	return nil
 }
 
 func (s *Service) touch(job *protocol.Job) {
@@ -472,10 +548,17 @@ func (s *Service) decorate(job protocol.Job) protocol.Job {
 	if rt != nil {
 		busy = rt.busy
 		qlen = len(rt.queue)
+		for _, q := range rt.queue {
+			job.QueuedRequestIDs = append(job.QueuedRequestIDs, q.requestID)
+		}
 		turnID = rt.turnID
 		stalled = rt.stalled
 		reason = rt.stalledReason
 		term = rt.term
+		if !rt.lastActivity.IsZero() {
+			job.LastActivityAt = rt.lastActivity
+			job.ActivityKind = rt.activityKind
+		}
 	}
 	s.mu.Unlock()
 	job.Busy = busy
@@ -483,6 +566,24 @@ func (s *Service) decorate(job protocol.Job) protocol.Job {
 	job.ActiveTurnID = turnID
 	job.Stalled = stalled
 	job.StalledReason = reason
+	switch {
+	case job.PauseReason != "":
+		job.WaitReason = job.PauseReason
+	case stalled:
+		job.WaitReason = reason
+	case job.State == protocol.StatePlanReady:
+		job.WaitReason = "approval"
+	case job.InputOwner == protocol.OwnerTUI:
+		job.WaitReason = "input_control"
+	case qlen > 0 && !busy:
+		job.WaitReason = "queued"
+	case busy && (job.LastActivityAt.IsZero() || s.clock.Now().Sub(job.LastActivityAt) > 5*time.Minute):
+		job.WaitReason = "no_recent_activity"
+	case busy:
+		job.WaitReason = "running"
+	default:
+		job.WaitReason = string(job.State)
+	}
 	if job.DesiredViewMode == "" {
 		job.DesiredViewMode = protocol.ViewHeadless
 	}
@@ -512,15 +613,22 @@ func (s *Service) snapshot(id string) protocol.Job {
 
 func (s *Service) fail(job protocol.Job, reason string) protocol.Job {
 	job.State = protocol.StateFailed
+	if job.ApprovalDelivery == "submitted" {
+		job.ApprovalDelivery = "unknown"
+		job.PauseReason = "approval_delivery_unknown"
+		job.Approved = false
+	}
 	job.LastSummary = reason
 	job.LastAction = "Failed"
 	s.touch(&job)
-	_ = s.store.AddEvent(job.JobID, string(protocol.StateFailed), reason, s.clock.Now())
 	s.save(job)
 	return s.decorate(job)
 }
 
 func (s *Service) emit(job protocol.Job) {
+	if latest, err := s.load(job.JobID); err == nil {
+		job = latest
+	}
 	job = s.decorate(job)
 	s.emitEvent(protocol.Event{Type: "job", Job: &job})
 }

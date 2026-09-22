@@ -34,6 +34,23 @@ export type Job = {
   debug_cursor?: number;
   queue_length?: number;
   active_turn_id?: string;
+  approval_id?: string;
+  approval_delivery?: string;
+  approval_supports_notes?: boolean;
+  pause_reason?: string;
+  result_turn_id?: string;
+  result?: { request_id: string; turn_id: string; text: string; offset: number; next_offset: number; total: number; has_more: boolean };
+  request_phase?: string;
+  request_id?: string;
+  accepted_request_id?: string;
+  queued_request_ids?: string[];
+  approved?: boolean;
+  plan_version?: number;
+  plan_turn_id?: string;
+  event_cursor?: number;
+  wait_reason?: string;
+  last_activity_at?: string;
+  activity_kind?: string;
   terminal_pid?: number;
   terminal_window_id?: string;
   stalled?: boolean;
@@ -218,5 +235,16 @@ const TURN_CONTROL: JobState[] = [
 
 export function canControlTurn(job: Job): boolean {
   if (job.user_cancelled) return false;
-  return TURN_CONTROL.includes(job.state);
+  return TURN_CONTROL.includes(job.state) || job.pause_reason === "approval_expired";
+}
+
+export function waitReasonLabel(reason?: string): string {
+ const labels: Record<string, string> = {
+   request_not_sent: "请求尚未发送，等待手动恢复", execution_unknown: "原调用结果未知，请在原会话核对后继续", approval: "等待方案审批", approval_delivery: "审批已提交，等待 Grok 确认", approval_delivery_unknown: "审批交付未确认，不会自动重发", approval_expired: "原审批已失效，请继续原会话重新提交", plan_content_missing: "已收到审批请求，但本次方案正文缺失", review_required: "最终回答待验收", input_control: "等待交互会话归还输入控制权",
+   queued: "等待队列执行", running: "后台执行中", no_recent_activity: "暂未收到活动（不代表卡死）",
+   disconnected: "连接已断开，等待手动恢复", queue_nonempty_but_pump_idle: "队列未被调度",
+   stale_tui_owner: "交互进程已退出，但输入控制权尚未归还", detach_timeout: "等待输入控制权交接",
+   executing_without_turn: "执行阶段没有活动调用或排队请求",
+ };
+ return reason ? labels[reason] ?? reason : "—";
 }

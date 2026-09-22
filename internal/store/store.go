@@ -2,8 +2,10 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"grokmcp/internal/protocol"
@@ -13,7 +15,8 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	writeMu sync.Mutex
 }
 
 func Open(path string) (*Store, error) {
@@ -90,6 +93,21 @@ CREATE TABLE IF NOT EXISTS settings (
 	if _, err := s.db.Exec(`UPDATE settings SET value='headless' WHERE key='default_view_mode' AND value<>'headless'`); err != nil {
 		return err
 	}
+	if _, err := s.db.Exec(`ALTER TABLE jobs ADD COLUMN lifecycle TEXT NOT NULL DEFAULT '{}'`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS job_notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, snapshot TEXT NOT NULL); CREATE INDEX IF NOT EXISTS notification_job ON job_notifications(job_id,id); CREATE TABLE IF NOT EXISTS request_results(job_id TEXT NOT NULL,request_id TEXT NOT NULL,turn_id TEXT NOT NULL,summary TEXT NOT NULL); CREATE TABLE IF NOT EXISTS work_requests(request_id TEXT PRIMARY KEY,job_id TEXT NOT NULL,prompt TEXT NOT NULL,planning INTEGER NOT NULL,state TEXT NOT NULL,turn_id TEXT NOT NULL DEFAULT '',summary TEXT NOT NULL DEFAULT '')`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS turn_results(job_id TEXT NOT NULL,request_id TEXT NOT NULL,turn_id TEXT NOT NULL,body TEXT NOT NULL,stop_reason TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(job_id,turn_id))`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`ALTER TABLE work_requests ADD COLUMN phase TEXT NOT NULL DEFAULT 'unknown'`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err := s.db.Exec(`UPDATE work_requests SET phase='queued' WHERE phase='unknown' AND state='queued' AND turn_id=''`); err != nil {
+		return err
+	}
 	return s.migrateProjects()
 }
 
@@ -97,25 +115,83 @@ func (s *Store) Ping() error {
 	return s.db.Ping()
 }
 
+type RequestResult struct {
+	RequestID, TurnID, Summary, Text, StopReason string
+	State                                        protocol.JobState
+}
+type WorkRequest struct {
+	RequestID, Prompt, Phase string
+	Planning                 bool
+}
 type Record struct {
+	RequestPhase string
+	Accepted     *WorkRequest
+	Result       *RequestResult
+
 	Job                protocol.Job
 	MissingMarkerCount int
 	RecoverFails       []int64
 }
 
 const jobSelectCols = `jobs.job_id, jobs.codex_thread_id, jobs.grok_session_id, jobs.cwd, jobs.title, jobs.state, jobs.view_mode, jobs.desired_view_mode, jobs.input_owner,
-		jobs.plan_digest, jobs.plan_summary, jobs.last_action, jobs.last_summary, jobs.user_cancelled, jobs.missing_marker_count, jobs.recover_fails, jobs.created_at, jobs.updated_at, jobs.archived_at, jobs.project_id, ifnull(projects.name,'')`
+		jobs.plan_digest, jobs.plan_summary, jobs.last_action, jobs.last_summary, jobs.user_cancelled, jobs.missing_marker_count, jobs.recover_fails, jobs.created_at, jobs.updated_at, jobs.archived_at, jobs.project_id, ifnull(projects.name,''), jobs.lifecycle`
 
 const jobFrom = `jobs LEFT JOIN projects ON projects.project_id = jobs.project_id`
 
 func (s *Store) PutJob(rec Record) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	j := rec.Job
-	_, err := s.db.Exec(`
+	var previous string
+	err = tx.QueryRow(`SELECT lifecycle FROM jobs WHERE job_id=?`, j.JobID).Scan(&previous)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	var old protocol.Job
+	if previous != "" {
+		if err := json.Unmarshal([]byte(previous), &old); err != nil {
+			return err
+		}
+	}
+	if rec.RequestPhase != "" {
+		j.RequestPhase = rec.RequestPhase
+	} else if j.RequestID != old.RequestID {
+		j.RequestPhase = "queued"
+	}
+	j.EventCursor = old.EventCursor
+	boundary := j.State.IsBoundary() || j.Stalled
+	if boundary && (old.State != j.State || old.RequestID != j.RequestID || old.PlanVersion != j.PlanVersion || old.StalledReason != j.StalledReason || old.LastSummary != j.LastSummary || old.ApprovalID != j.ApprovalID || old.PauseReason != j.PauseReason) {
+		b, err := json.Marshal(j)
+		if err != nil {
+			return err
+		}
+		result, err := tx.Exec(`INSERT INTO job_notifications(job_id,snapshot) VALUES(?,?)`, j.JobID, string(b))
+		if err != nil {
+			return err
+		}
+		j.EventCursor, err = result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`INSERT INTO boundary_events(job_id,event_type,summary,created_at) VALUES(?,?,?,?)`, j.JobID, string(j.State), j.LastSummary, j.UpdatedAt.Unix()); err != nil {
+			return err
+		}
+	}
+	lifecycle, err := json.Marshal(j)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`
 INSERT INTO jobs (
   job_id, codex_thread_id, grok_session_id, cwd, title, state, view_mode, desired_view_mode, input_owner,
   plan_digest, plan_summary, last_action, last_summary, user_cancelled, missing_marker_count, recover_fails,
-  created_at, updated_at, archived_at, project_id
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  created_at, updated_at, archived_at, project_id, lifecycle
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(job_id) DO UPDATE SET
   codex_thread_id=excluded.codex_thread_id,
   grok_session_id=excluded.grok_session_id,
@@ -134,11 +210,50 @@ ON CONFLICT(job_id) DO UPDATE SET
   recover_fails=excluded.recover_fails,
   updated_at=excluded.updated_at,
   archived_at=excluded.archived_at,
-  project_id=excluded.project_id
+  project_id=excluded.project_id, lifecycle=excluded.lifecycle
 `, j.JobID, j.CodexThreadID, j.GrokSessionID, j.Cwd, j.Title, string(j.State), string(j.ViewMode),
 		string(desiredView(j)), string(j.InputOwner), j.PlanDigest, j.PlanSummary, j.LastAction, j.LastSummary, boolToInt(j.UserCancelled),
-		rec.MissingMarkerCount, joinInt64(rec.RecoverFails), j.CreatedAt.Unix(), j.UpdatedAt.Unix(), nullUnix(j.ArchivedAt), nullString(j.ProjectID))
-	return err
+		rec.MissingMarkerCount, joinInt64(rec.RecoverFails), j.CreatedAt.Unix(), j.UpdatedAt.Unix(), nullUnix(j.ArchivedAt), nullString(j.ProjectID), string(lifecycle))
+	if err != nil {
+		return err
+	}
+	if r := rec.Accepted; r != nil {
+		if _, err := tx.Exec(`INSERT INTO work_requests(request_id,job_id,prompt,planning,state,phase) VALUES(?,?,?,?, 'queued','queued') ON CONFLICT(request_id) DO NOTHING`, r.RequestID, j.JobID, r.Prompt, boolToInt(r.Planning)); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE work_requests SET state=?,turn_id=? WHERE request_id=? AND state<>'completed'`, string(j.State), j.ActiveTurnID, j.RequestID); err != nil {
+		return err
+	}
+	if rec.RequestPhase != "" {
+		if _, err := tx.Exec(`UPDATE work_requests SET phase=? WHERE request_id=?`, rec.RequestPhase, j.RequestID); err != nil {
+			return err
+		}
+	}
+	if j.UserCancelled {
+		if _, err := tx.Exec(`UPDATE work_requests SET state='cancelled' WHERE job_id=? AND state<>'completed'`, j.JobID); err != nil {
+			return err
+		}
+	}
+	if r := rec.Result; r != nil {
+		resultState := r.State
+		if resultState == "" {
+			resultState = protocol.StateCompleted
+		}
+		if _, err := tx.Exec(`INSERT INTO turn_results(job_id,request_id,turn_id,body,stop_reason,state) VALUES(?,?,?,?,?,?)`, j.JobID, r.RequestID, r.TurnID, r.Text, r.StopReason, string(resultState)); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE work_requests SET state=?,summary=?,turn_id=? WHERE request_id=?`, string(resultState), r.Summary, r.TurnID, r.RequestID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO request_results(job_id,request_id,turn_id,summary) VALUES(?,?,?,?)`, j.JobID, r.RequestID, r.TurnID, r.Summary); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO boundary_events(job_id,event_type,summary,created_at) VALUES(?,?,?,?)`, j.JobID, "request_"+string(resultState), r.Summary, j.UpdatedAt.Unix()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetJob(id string) (Record, error) {
@@ -252,6 +367,11 @@ func (s *Store) DeleteJob(id string) error {
 	if _, err := tx.Exec(`DELETE FROM boundary_events WHERE job_id=?`, id); err != nil {
 		return err
 	}
+	for _, table := range []string{"job_notifications", "request_results", "work_requests", "turn_results"} {
+		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE job_id=?`, id); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(`DELETE FROM jobs WHERE job_id=?`, id); err != nil {
 		return err
 	}
@@ -354,12 +474,27 @@ func scanJob(row rowScanner) (Record, error) {
 	var archived sql.NullInt64
 	var fails string
 	var projectID, projectName sql.NullString
+	var lifecycle string
 	err := row.Scan(&rec.Job.JobID, &rec.Job.CodexThreadID, &rec.Job.GrokSessionID, &rec.Job.Cwd, &rec.Job.Title,
 		&state, &view, &desired, &owner, &rec.Job.PlanDigest, &rec.Job.PlanSummary, &rec.Job.LastAction, &rec.Job.LastSummary,
-		&cancelled, &rec.MissingMarkerCount, &fails, &created, &updated, &archived, &projectID, &projectName)
+		&cancelled, &rec.MissingMarkerCount, &fails, &created, &updated, &archived, &projectID, &projectName, &lifecycle)
 	if err != nil {
 		return Record{}, err
 	}
+	var meta protocol.Job
+	if err := json.Unmarshal([]byte(lifecycle), &meta); err != nil {
+		return Record{}, err
+	}
+	rec.Job.RequestID, rec.Job.Approved = meta.RequestID, meta.Approved
+	rec.Job.RequestPhase = meta.RequestPhase
+	rec.Job.ApprovalID, rec.Job.ApprovalConnectionID = meta.ApprovalID, meta.ApprovalConnectionID
+	rec.Job.ApprovalSupportsNotes, rec.Job.ApprovalDelivery = meta.ApprovalSupportsNotes, meta.ApprovalDelivery
+	rec.Job.PauseReason, rec.Job.ResultTurnID = meta.PauseReason, meta.ResultTurnID
+	rec.Job.PlanVersion, rec.Job.PlanTurnID = meta.PlanVersion, meta.PlanTurnID
+	rec.Job.EventCursor = meta.EventCursor
+	rec.Job.ActiveTurnID = meta.ActiveTurnID
+	rec.Job.LastActivityAt, rec.Job.ActivityKind = meta.LastActivityAt, meta.ActivityKind
+	rec.Job.Stalled, rec.Job.StalledReason = meta.Stalled, meta.StalledReason
 	rec.Job.State = protocol.JobState(state)
 	rec.Job.ViewMode = protocol.ViewMode(view)
 	rec.Job.DesiredViewMode = protocol.ViewMode(desired.String)

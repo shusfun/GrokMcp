@@ -30,6 +30,9 @@ func (s *Service) ListJobsPage(_ context.Context, q protocol.ListJobsQuery) (pro
 }
 
 func (s *Service) ArchiveJob(_ context.Context, jobID string) (protocol.Job, error) {
+	rt := s.runtime(jobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
 	job, err := s.load(jobID)
 	if err != nil {
 		return protocol.Job{}, err
@@ -46,6 +49,9 @@ func (s *Service) ArchiveJob(_ context.Context, jobID string) (protocol.Job, err
 }
 
 func (s *Service) UnarchiveJob(_ context.Context, jobID string) (protocol.Job, error) {
+	rt := s.runtime(jobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
 	job, err := s.load(jobID)
 	if err != nil {
 		return protocol.Job{}, err

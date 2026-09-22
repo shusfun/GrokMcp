@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +37,14 @@ type exitPlanExtReq struct {
 }
 
 type Grok struct {
+	transportClosers []io.Closer
+	connectionID     string
+	requests         map[string]string
+	approvals        map[string]PlanRequest
+	planHandler      func(PlanRequest) error
+	activityHandler  func(Activity)
+
+	turns           map[string]string
 	leaderConsole   *ownedprocess.Console
 	Bin             string
 	Finder          grokbin.Finder
@@ -57,9 +66,8 @@ type Grok struct {
 	last            map[string]string
 	plan            map[string]bool
 	pending         map[string]chan planChoice
-	arm             map[string]planChoice
+	pendingNotes    map[string]bool
 	attach          string
-	planFn          func(string, string)
 	trace           trace.Sink
 	disconnectFn    func()
 }
@@ -67,7 +75,7 @@ type Grok struct {
 func NewGrok(bin string, finder grokbin.Finder) *Grok {
 	return &Grok{
 		Bin: bin, Finder: finder, last: map[string]string{}, plan: map[string]bool{},
-		pending: map[string]chan planChoice{}, arm: map[string]planChoice{}, attach: "boundary",
+		pending: map[string]chan planChoice{}, attach: "boundary",
 	}
 }
 
@@ -209,8 +217,17 @@ func (g *Grok) LoadConnectedSession(ctx context.Context, sessionID, cwd string) 
 func (g *Grok) Prompt(ctx context.Context, sessionID, text string) (PromptResult, error) {
 	g.mu.Lock()
 	conn := g.conn
+	if g.turns == nil {
+		g.turns = map[string]string{}
+	}
+	g.turns[sessionID] = TurnID(ctx)
+	if g.requests == nil {
+		g.requests = map[string]string{}
+	}
+	g.requests[sessionID] = RequestID(ctx)
 	client := g.client
 	g.plan[sessionID] = false
+	g.last[sessionID] = ""
 	g.mu.Unlock()
 	if conn == nil {
 		return PromptResult{}, ErrDisconnected
@@ -253,39 +270,18 @@ func (g *Grok) Cancel(ctx context.Context, sessionID string) error {
 	return conn.Cancel(ctx, acp.CancelNotification{SessionId: acp.SessionId(sessionID)})
 }
 
-func (g *Grok) ResolvePlan(_ context.Context, sessionID string, decide protocol.PlanDecision, notes string) error {
-	choice := planChoice{decide: decide, notes: notes}
+func (g *Grok) clearPending(sessionID string, expected chan planChoice) {
 	g.mu.Lock()
-	ch := g.pending[sessionID]
-	if ch == nil {
-		if g.arm == nil {
-			g.arm = map[string]planChoice{}
+	if g.pending[sessionID] == expected {
+		delete(g.pending, sessionID)
+		delete(g.pendingNotes, sessionID)
+		for id, p := range g.approvals {
+			if p.SessionID == sessionID {
+				delete(g.approvals, id)
+			}
 		}
-		g.arm[sessionID] = choice
-		g.mu.Unlock()
-		return ErrNoPlanPermission
+		g.plan[sessionID] = false
 	}
-	g.mu.Unlock()
-	select {
-	case ch <- choice:
-	default:
-	}
-	return nil
-}
-
-func (g *Grok) consumeArm(sessionID string) (planChoice, bool) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	v, ok := g.arm[sessionID]
-	if ok {
-		delete(g.arm, sessionID)
-	}
-	return v, ok
-}
-
-func (g *Grok) clearPending(sessionID string) {
-	g.mu.Lock()
-	delete(g.pending, sessionID)
 	g.mu.Unlock()
 }
 
@@ -313,7 +309,7 @@ func (g *Grok) handleExitPlanMode(ctx context.Context, raw json.RawMessage) (any
 	if sid == "" {
 		return nil, acp.NewInvalidParams(map[string]any{"error": "sessionId required"})
 	}
-	choice, err := g.awaitPlanChoice(ctx, sid, req.PlanContent)
+	choice, err := g.awaitPlanChoiceWithNotes(ctx, sid, req.PlanContent, true)
 	if err != nil {
 		return nil, err
 	}
@@ -321,28 +317,49 @@ func (g *Grok) handleExitPlanMode(ctx context.Context, raw json.RawMessage) (any
 }
 
 func (g *Grok) awaitPlanChoice(ctx context.Context, sid, excerpt string) (planChoice, error) {
-	if choice, armed := g.consumeArm(sid); armed {
-		g.setPlanFlag(sid, choice.decide == protocol.PlanApprove)
-		return choice, nil
-	}
+	return g.awaitPlanChoiceWithNotes(ctx, sid, excerpt, false)
+}
+func (g *Grok) awaitPlanChoiceWithNotes(ctx context.Context, sid, excerpt string, notes bool) (planChoice, error) {
 	g.mu.Lock()
+	if (connectionID(ctx) != "" && connectionID(ctx) != g.connectionID) || (TurnID(ctx) != "" && TurnID(ctx) != g.turns[sid]) || (RequestID(ctx) != "" && RequestID(ctx) != g.requests[sid]) {
+		g.mu.Unlock()
+		return planChoice{}, errors.New("permission belongs to a stale connection or turn")
+	}
+	if g.pending[sid] != nil {
+		g.mu.Unlock()
+		return planChoice{}, errors.New("another plan permission is pending for this session")
+	}
 	g.plan[sid] = true
 	ch := make(chan planChoice, 1)
 	g.pending[sid] = ch
-	g.last[sid] = "Plan ready"
-	hook := g.planFn
-	g.mu.Unlock()
-	if hook != nil {
-		hook(sid, excerpt)
+	if g.pendingNotes == nil {
+		g.pendingNotes = map[string]bool{}
 	}
+	g.pendingNotes[sid] = notes
+	g.last[sid] = "Plan ready"
+	turnID := g.turns[sid]
+	handler := g.planHandler
+	request := PlanRequest{ID: uuid.NewString(), ConnectionID: g.connectionID, SessionID: sid, RequestID: g.requests[sid], TurnID: turnID, Content: excerpt, SupportsNotes: notes, CreatedAt: time.Now().UTC()}
+	if g.approvals == nil {
+		g.approvals = map[string]PlanRequest{}
+	}
+	g.approvals[request.ID] = request
+	g.mu.Unlock()
+	if handler == nil {
+		g.clearPending(sid, ch)
+		return planChoice{}, errors.New("no supervisor plan handler")
+	}
+	if err := handler(request); err != nil {
+		g.clearPending(sid, ch)
+		return planChoice{}, err
+	}
+
 	select {
 	case <-ctx.Done():
-		g.clearPending(sid)
-		g.setPlanFlag(sid, false)
+		g.clearPending(sid, ch)
 		return planChoice{}, ctx.Err()
 	case choice := <-ch:
-		g.clearPending(sid)
-		g.setPlanFlag(sid, choice.decide == protocol.PlanApprove)
+		g.clearPending(sid, ch)
 		return choice, nil
 	}
 }
@@ -373,18 +390,6 @@ func exitPlanResponse(decide protocol.PlanDecision, notes string) map[string]any
 	return out
 }
 
-func (g *Grok) setPlanFlag(sessionID string, ready bool) {
-	g.mu.Lock()
-	g.plan[sessionID] = ready
-	g.mu.Unlock()
-}
-
-func (g *Grok) SetPlanListener(fn func(string, string)) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.planFn = fn
-}
-
 func isExitPlanCall(tc acp.ToolCallUpdate) bool {
 	if looksLikeExitPlan(deref(tc.Title)) {
 		return true
@@ -392,18 +397,19 @@ func isExitPlanCall(tc acp.ToolCallUpdate) bool {
 	if looksLikeExitPlan(string(tc.ToolCallId)) {
 		return true
 	}
-	if tc.RawInput != nil && looksLikeExitPlan(fmt.Sprint(tc.RawInput)) {
-		return true
+	if input, ok := tc.RawInput.(map[string]any); ok {
+		for _, key := range []string{"name", "toolName", "tool"} {
+			if name, ok := input[key].(string); ok && looksLikeExitPlan(name) {
+				return true
+			}
+		}
 	}
 	return false
 }
 
 func looksLikeExitPlan(title string) bool {
-	n := normalizePlanText(title)
-	if strings.Contains(n, "plan exit") || strings.Contains(n, "exit plan") {
-		return true
-	}
-	return strings.Contains(strings.ReplaceAll(n, " ", ""), "exitplanmode")
+	n := normalizePlanText(strings.TrimPrefix(title, "_x.ai/"))
+	return n == "plan exit" || n == "exit plan" || n == "exit plan mode" || n == "exitplanmode"
 }
 
 func normalizePlanText(s string) string {
@@ -496,4 +502,14 @@ func gitWorktree(cwd string) (string, error) {
 		return "", fmt.Errorf("worktree add: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return dir, nil
+}
+
+func (g *Grok) PlanSession(ctx context.Context, sessionID string) error {
+	g.mu.Lock()
+	conn := g.conn
+	g.mu.Unlock()
+	if conn == nil {
+		return ErrDisconnected
+	}
+	return setPlanMode(ctx, conn.SetSessionMode, acp.SessionId(sessionID), nil)
 }

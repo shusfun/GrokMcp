@@ -3,11 +3,15 @@ package supervisor
 import (
 	"context"
 	"errors"
-	"fmt"
+	"github.com/google/uuid"
+	"grokmcp/internal/textutil"
+	"os"
 	"strings"
+	"time"
 
 	"grokmcp/internal/agent"
 	"grokmcp/internal/protocol"
+	"grokmcp/internal/store"
 	"grokmcp/internal/trace"
 )
 
@@ -25,19 +29,49 @@ func (s *Service) currentGen(jobID string) uint64 {
 	return rt.gen
 }
 
-func (s *Service) enqueue(jobID string, q queued) {
+func (s *Service) enqueue(jobID string, q queued) error {
 	rt := s.runtime(jobID)
+	if q.requestID == "" {
+		if job, err := s.load(jobID); err == nil {
+			q.requestID = job.RequestID
+		}
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return
+		return errors.New("supervisor closed")
 	}
 	q.gen = rt.gen
-	rt.queue = append(rt.queue, q)
+	if q.requestID == "" {
+		q.requestID = rt.requestID
+	}
+	if q.requestID == "" {
+		q.requestID = uuid.NewString()
+	}
+	s.mu.Unlock()
+	rec, err := s.record(jobID)
+	if err != nil {
+		return err
+	}
+	if q.acceptedJob != nil {
+		rec.Job = *q.acceptedJob
+	}
+	rec.Accepted = &store.WorkRequest{RequestID: q.requestID, Prompt: q.text, Planning: q.planning}
+	if err := s.store.PutJob(rec); err != nil {
+		s.persistenceFailed(jobID, err)
+		return err
+	}
+	s.mu.Lock()
+	if q.kind == "continue" && !q.connect {
+		rt.queue = append([]queued{q}, rt.queue...)
+	} else {
+		rt.queue = append(rt.queue, q)
+	}
 	n := len(rt.queue)
 	busy := rt.busy
 	s.mu.Unlock()
 	job, _ := s.load(jobID)
+	s.emit(job)
 	s.emitTrace(job, "info", trace.SourceFIFO, "queue.enqueued", q.kind, map[string]any{"kind": q.kind, "queue_length": n})
 	if !busy {
 		s.pumps.Add(1)
@@ -46,6 +80,7 @@ func (s *Service) enqueue(jobID string, q queued) {
 			s.pump(jobID)
 		}()
 	}
+	return nil
 }
 
 func (s *Service) kick(jobID string) {
@@ -64,6 +99,11 @@ func (s *Service) kick(jobID string) {
 }
 
 func (s *Service) liveGrok(jobID string) bool {
+	if j, err := s.load(jobID); err == nil {
+		if t, ok := s.term.(interface{ WorkerAlive(string) bool }); ok {
+			return t.WorkerAlive(j.GrokSessionID)
+		}
+	}
 	rt := s.runtime(jobID)
 	s.mu.Lock()
 	h := rt.term
@@ -100,18 +140,29 @@ func (s *Service) attachAllowed(job protocol.Job) bool {
 
 func (s *Service) pump(jobID string) {
 	for {
-		job, err := s.load(jobID)
 		rt := s.runtime(jobID)
+		rt.coord.Lock()
+		job, err := s.load(jobID)
+		priorPlanContent, _ := os.ReadFile(s.planPath(job.Cwd, job.GrokSessionID))
+		priorPlanDigest := textutil.Digest(string(priorPlanContent))
 		s.mu.Lock()
 		closed := s.closed
+		controlPending := rt.controlPending
 		busy := rt.busy
 		qlen := len(rt.queue)
 		s.mu.Unlock()
-		if closed {
+		if closed || controlPending {
+			rt.coord.Unlock()
 			s.skipPump(job, "closed", qlen)
 			return
 		}
+		if err == nil && (job.State == protocol.StatePlanReady || job.PauseReason == "review_required" || job.ApprovalDelivery == "unknown") && qlen > 0 {
+			rt.coord.Unlock()
+			s.skipPump(job, "approval", qlen)
+			return
+		}
 		if err == nil && job.ViewMode == protocol.ViewDetaching && qlen > 0 {
+			rt.coord.Unlock()
 			s.skipPump(job, "detaching", qlen)
 			return
 		}
@@ -120,12 +171,14 @@ func (s *Service) pump(jobID string) {
 			if !s.liveGrok(jobID) {
 				reason = "stale_tui_owner"
 			}
+			rt.coord.Unlock()
 			s.skipPump(job, reason, qlen)
 			return
 		}
 		s.mu.Lock()
 		if rt.busy || len(rt.queue) == 0 {
 			s.mu.Unlock()
+			rt.coord.Unlock()
 			if busy && qlen > 0 {
 				s.skipPump(job, "already_busy", qlen)
 			}
@@ -134,24 +187,62 @@ func (s *Service) pump(jobID string) {
 		item := rt.queue[0]
 		rt.queue = rt.queue[1:]
 		rt.busy = true
+		rt.cancelledTurn = false
 		rt.turnSeq++
-		item.turnID = fmt.Sprintf("%s-%d", jobID, rt.turnSeq)
+		item.turnID = uuid.NewString()
 		rt.turnID = item.turnID
+		rt.requestID = item.requestID
+		rt.sessionID = job.GrokSessionID
+		rt.lastActivity = s.clock.Now()
+		rt.activityKind = "prompt_started"
+		rt.turnStartedAt = time.Now().UTC()
+		rt.planFileDigest = priorPlanDigest
 		ctx, cancel := context.WithCancel(context.Background())
 		rt.cancel = cancel
 		s.mu.Unlock()
+		if item.requestID != job.RequestID {
+			job.RequestID = item.requestID
+			job.LastSummary = ""
+			job.LastAction = "Accepted"
+		}
+		if item.planning {
+			job.State = protocol.StatePlanning
+			job.Approved = false
+			job.PlanSummary = ""
+			job.PlanDigest = ""
+		} else if job.State != protocol.StatePlanReady {
+			job.State = protocol.StateExecuting
+		}
+		job.PauseReason = ""
+		job.ActiveTurnID = item.turnID
+		if err := s.commitPhase(job, "preparing"); err != nil {
+			cancel()
+			s.mu.Lock()
+			rt.busy = false
+			rt.cancel = nil
+			rt.turnID = ""
+			s.mu.Unlock()
+			rt.coord.Unlock()
+			return
+		}
+		rt.coord.Unlock()
 		s.emitTrace(job, "info", trace.SourceFIFO, "queue.dequeued", item.kind, map[string]any{"kind": item.kind, "turn_id": item.turnID})
 		s.emitTrace(job, "info", trace.SourceFIFO, "pump.started", item.kind, map[string]any{"kind": item.kind, "turn_id": item.turnID})
 
-		s.runItem(ctx, jobID, item)
+		finishResult := s.runItem(ctx, jobID, item)
 		cancel()
 
+		rt.coord.Lock()
 		s.mu.Lock()
 		rt.busy = false
 		rt.cancel = nil
 		rt.turnID = ""
 		more := len(rt.queue) > 0
 		s.mu.Unlock()
+		if finishResult != nil {
+			finishResult()
+		}
+		rt.coord.Unlock()
 		s.emitTrace(job, "info", trace.SourceFIFO, "pump.stopped", item.kind, map[string]any{"kind": item.kind, "turn_id": item.turnID})
 		s.maybeAttachDesired(jobID)
 		if !more {
@@ -188,25 +279,19 @@ func (s *Service) maybeAttachDesired(jobID string) {
 	_, _ = s.launchTUI(context.Background(), job)
 }
 
-func (s *Service) runItem(ctx context.Context, jobID string, item queued) {
+func (s *Service) runItem(ctx context.Context, jobID string, item queued) func() {
 	job, err := s.load(jobID)
 	if err != nil {
-		return
+		return nil
 	}
 	if job.UserCancelled && item.kind != "cancel" {
-		return
+		return nil
 	}
 	if job.ViewMode == protocol.ViewDetaching {
 		s.skipPump(job, "detaching", 1)
-		s.enqueue(jobID, item)
-		return
+		return func() { _ = s.enqueue(jobID, item) }
 	}
-	if item.kind == "approve" {
-		switch job.State {
-		case protocol.StateCompleted, protocol.StateCancelled, protocol.StateFailed:
-			return
-		}
-	}
+
 	fields := trace.PromptFields(item.text, s.debugPayloads(jobID))
 	fields["kind"] = item.kind
 	s.emitTrace(job, "info", trace.SourceACP, "acp.prompt.started", item.kind, fields)
@@ -216,35 +301,67 @@ func (s *Service) runItem(ctx context.Context, jobID string, item queued) {
 			load = s.agent.LoadSession
 		}
 		if err := load(ctx, job.GrokSessionID, job.Cwd); err != nil {
-			s.disconnectWithError(jobID, err.Error())
-			return
+			return func() {
+				if item.gen == s.currentGen(jobID) {
+					s.disconnectLocked(jobID, err.Error())
+				}
+			}
 		}
 	}
-	res, err := s.agent.Prompt(ctx, job.GrokSessionID, item.text)
+	if item.planning && item.kind != "plan" {
+		if err := s.agent.PlanSession(ctx, job.GrokSessionID); err != nil {
+			return func() {
+				if item.gen == s.currentGen(jobID) {
+					if isDisconnect(err) {
+						s.disconnectLocked(jobID, err.Error())
+					} else {
+						s.fail(job, err.Error())
+					}
+				}
+			}
+		}
+	}
+	rt := s.runtime(jobID)
+	rt.coord.Lock()
+	if item.gen != s.currentGen(jobID) || ctx.Err() != nil {
+		rt.coord.Unlock()
+		return nil
+	}
+	current, loadErr := s.load(jobID)
+	if loadErr == nil {
+		current.ActiveTurnID = item.turnID
+		loadErr = s.commitPhase(current, "sent")
+	}
+	rt.coord.Unlock()
+	if loadErr != nil {
+		return func() { s.persistenceFailed(jobID, loadErr) }
+	}
+	res, err := s.agent.Prompt(agent.WithRequest(agent.WithTurn(ctx, item.turnID), item.requestID), job.GrokSessionID, item.text)
 	if item.gen != s.currentGen(jobID) {
 		s.emitTrace(job, "debug", trace.SourceFIFO, "pump.skipped", "stale generation", map[string]any{"reason": "stale_generation"})
-		return
+		return nil
 	}
 	if err != nil {
 		if ctx.Err() != nil {
 			s.emitTrace(job, "info", trace.SourceACP, "acp.prompt.cancelled", "prompt cancelled", map[string]any{"turn_id": item.turnID})
-			return
+			return nil
 		}
 		s.emitTrace(job, "error", trace.SourceACP, "acp.prompt.completed", err.Error(), map[string]any{"error": err.Error()})
-		if isDisconnect(err) {
-			s.Disconnect(jobID)
-			return
+		return func() {
+			if item.gen != s.currentGen(jobID) {
+				return
+			}
+			if isDisconnect(err) {
+				s.disconnectLocked(jobID, err.Error())
+				return
+			}
+			if current, e := s.load(jobID); e == nil {
+				s.fail(current, err.Error())
+			}
 		}
-		job.State = protocol.StateFailed
-		job.LastSummary = err.Error()
-		job.LastAction = "Failed"
-		s.touch(&job)
-		_ = s.store.AddEvent(job.JobID, string(protocol.StateFailed), job.LastSummary, s.clock.Now())
-		s.save(job)
-		return
 	}
 	s.emitTrace(job, "info", trace.SourceACP, "acp.prompt.completed", item.kind, map[string]any{"kind": item.kind, "turn_id": item.turnID})
-	s.applyPromptResult(jobID, item, res)
+	return func() { s.applyPromptResult(jobID, item, res) }
 }
 
 func isDisconnect(err error) bool {
@@ -255,5 +372,20 @@ func isDisconnect(err error) bool {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "eof") || strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection reset")
+	return strings.Contains(msg, "eof") || strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection reset") || strings.Contains(msg, "peer disconnected") || strings.Contains(msg, "connection closed") || strings.Contains(msg, "transport closed")
+}
+
+func (s *Service) commitPhase(job protocol.Job, phase string) error {
+	rec, err := s.record(job.JobID)
+	if err != nil {
+		return err
+	}
+	rec.Job = job
+	rec.RequestPhase = phase
+	if err := s.store.PutJob(rec); err != nil {
+		s.persistenceFailed(job.JobID, err)
+		return err
+	}
+	s.emit(job)
+	return nil
 }

@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
+	"io"
 	"os"
 	"time"
 
@@ -18,6 +21,7 @@ type connectionAttempt struct {
 	err    error
 }
 type connectionResources struct {
+	closers []io.Closer
 	console *ownedprocess.Console
 	leader  *ownedprocess.Process
 	group   *ownedprocess.Group
@@ -34,6 +38,9 @@ func (g *Grok) SessionLoaded(sessionID string) bool {
 }
 
 func (r *connectionResources) close() {
+	for _, c := range r.closers {
+		_ = c.Close()
+	}
 	for _, f := range r.streams {
 		_ = f.Close()
 	}
@@ -106,6 +113,7 @@ func (g *Grok) initialize(ctx context.Context, a *connectionAttempt) {
 	}
 	if err == nil {
 		g.group, g.process, g.streams = r.group, r.process, r.streams
+		g.transportClosers = r.closers
 		g.leader = r.leader
 		g.leaderConsole = r.console
 		g.conn, g.client = r.conn, r.client
@@ -123,22 +131,30 @@ func (g *Grok) initialize(ctx context.Context, a *connectionAttempt) {
 	}
 	close(a.done)
 	g.mu.Unlock()
-	if err == nil && r.process != nil {
+	if err == nil && r.conn != nil {
 		go func() {
-			var leaderDone <-chan struct{}
+			var leaderDone, processDone <-chan struct{}
+			if r.process != nil {
+				processDone = r.process.Done()
+			}
 			if r.leader != nil {
 				leaderDone = r.leader.Done()
 			}
 			select {
-			case <-r.process.Done():
+			case <-processDone:
+			case <-r.conn.Done():
 			case <-leaderDone:
 			}
 			g.resourceMu.Lock()
 			g.mu.Lock()
-			lost := g.process == r.process
+			lost := g.conn == r.conn
 			notify := g.disconnectFn
 			if lost {
 				g.conn = nil
+				g.connectionID = ""
+				g.approvals = map[string]PlanRequest{}
+				g.pending = map[string]chan planChoice{}
+				g.pendingNotes = map[string]bool{}
 				g.client = nil
 				g.process = nil
 				g.leader = nil
@@ -206,28 +222,8 @@ func (g *Grok) connect(ctx context.Context) (*connectionResources, error) {
 	r.process = p
 	_ = stdinR.Close()
 	_ = stdoutW.Close()
-	client := newACPClient()
-	client.onUpdate = func(sid, action string, plan bool) {
-		g.mu.Lock()
-		if action != "" {
-			g.last[sid] = action
-		}
-		if plan {
-			g.plan[sid] = true
-		}
-		g.mu.Unlock()
-	}
-	client.onPermission = g.handlePermission
-	client.onExitPlan = g.handleExitPlanMode
-	r.client = client
-	r.conn = acp.NewClientSideConnection(client, stdinW, stdoutR)
-	_, err = r.conn.Initialize(ctx, acp.InitializeRequest{
-		ProtocolVersion:    acp.ProtocolVersionNumber,
-		ClientCapabilities: acp.ClientCapabilities{Fs: acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true}},
-		ClientInfo:         &acp.Implementation{Name: "Grok Supervisor", Version: "0.1.0"},
-	})
-	if err != nil {
-		return r, fmt.Errorf("连接专用 Grok leader 失败（不会自动重试）: %w", err)
+	if err := g.connectACP(ctx, r, stdinW, stdoutR); err != nil {
+		return r, err
 	}
 	if r.leader != nil && !r.leader.Alive() {
 		return r, errors.New("专用 leader 已退出，拒绝连接其他 leader")
@@ -249,13 +245,18 @@ func (g *Grok) Release() error {
 	g.resourceMu.Lock()
 	defer g.resourceMu.Unlock()
 	g.mu.Lock()
-	r := &connectionResources{group: g.group, streams: g.streams, console: g.leaderConsole}
+	r := &connectionResources{group: g.group, streams: g.streams, console: g.leaderConsole, closers: g.transportClosers}
+	g.transportClosers = nil
 	g.group = nil
 	g.streams = nil
 	g.process = nil
 	g.leader = nil
 	g.leaderConsole = nil
 	g.conn = nil
+	g.connectionID = ""
+	g.approvals = map[string]PlanRequest{}
+	g.pending = map[string]chan planChoice{}
+	g.pendingNotes = map[string]bool{}
 	g.client = nil
 	g.loaded = nil
 	g.attach = "boundary"
@@ -265,3 +266,67 @@ func (g *Grok) Release() error {
 }
 
 func (g *Grok) Close() error { g.mu.Lock(); g.closed = true; g.mu.Unlock(); return g.Release() }
+
+func (g *Grok) connectACP(ctx context.Context, r *connectionResources, input io.Writer, output io.Reader) error {
+	client := newACPClient()
+	connectionID := uuid.NewString()
+	g.mu.Lock()
+	g.connectionID = connectionID
+	g.mu.Unlock()
+	client.origin = func(sid string) Activity {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return Activity{ConnectionID: connectionID, SessionID: sid, RequestID: g.requests[sid], TurnID: g.turns[sid]}
+	}
+
+	client.onActivity = func(sid, kind string) {
+		g.mu.Lock()
+		handler := g.activityHandler
+		activity := Activity{ConnectionID: connectionID, SessionID: sid, RequestID: g.requests[sid], TurnID: g.turns[sid], Kind: kind, At: time.Now().UTC()}
+		valid := g.connectionID == connectionID
+		g.mu.Unlock()
+		if valid && handler != nil {
+			handler(activity)
+		}
+
+	}
+	client.onUpdate = func(sid, action string, plan bool) {
+		g.mu.Lock()
+		if action != "" {
+			g.last[sid] = action
+		}
+		if plan {
+			g.plan[sid] = true
+		}
+		g.mu.Unlock()
+	}
+	client.onPermission = func(ctx context.Context, p acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
+		g.mu.Lock()
+		valid := g.connectionID == connectionID
+		g.mu.Unlock()
+		if !valid {
+			return acp.RequestPermissionResponse{}, ErrDisconnected
+		}
+		return g.handlePermission(withConnection(ctx, connectionID), p)
+	}
+	client.onExitPlan = func(ctx context.Context, raw json.RawMessage) (any, error) {
+		g.mu.Lock()
+		valid := g.connectionID == connectionID
+		g.mu.Unlock()
+		if !valid {
+			return nil, ErrDisconnected
+		}
+		return g.handleExitPlanMode(withConnection(ctx, connectionID), raw)
+	}
+	r.client = client
+	r.conn = acp.NewClientSideConnection(client, input, output)
+	_, err := r.conn.Initialize(ctx, acp.InitializeRequest{
+		ProtocolVersion:    acp.ProtocolVersionNumber,
+		ClientCapabilities: acp.ClientCapabilities{Fs: acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true}},
+		ClientInfo:         &acp.Implementation{Name: "Grok Supervisor", Version: "0.1.0"},
+	})
+	if err != nil {
+		return fmt.Errorf("连接专用 Grok leader 失败（不会自动重试）: %w", err)
+	}
+	return nil
+}

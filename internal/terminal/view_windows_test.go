@@ -31,7 +31,7 @@ func fixtureWorker(t *testing.T) *terminalWorker {
 		c.Close()
 		t.Fatal(err)
 	}
-	script := `let n=0;process.stdin.setRawMode(true);process.stdin.on('data',d=>process.stdout.write('INPUT:'+d.toString()+'\r\n'));setInterval(()=>process.stdout.write('TICK:'+(++n)+'\r\n'),50)`
+	script := `let n=0;process.stdin.setRawMode(true);process.stdout.write('ONE_TIME_HEADER\r\n');process.stdin.on('data',d=>{if(d.includes(12)){process.stdout.write('\x1b[2J\x1b[HHISTORY_CLEARED\r\n')}else{process.stdout.write('INPUT:'+d.toString()+'\r\n')}});setInterval(()=>process.stdout.write('TICK:'+(++n)+'\r\n'),50)`
 	p, err := g.Start(ownedprocess.Spec{Path: node, Args: []string{"-e", script}, Console: c})
 	if err != nil {
 		g.Close()
@@ -42,6 +42,46 @@ func fixtureWorker(t *testing.T) *terminalWorker {
 	close(w.ready)
 	t.Cleanup(w.close)
 	return w
+}
+
+func TestViewerStartsWithReadyResetInsteadOfHistoricalDrawing(t *testing.T) {
+	w := fixtureWorker(t)
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(string(w.console.Output()), "ONE_TIME_HEADER") && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(string(w.console.Output()), "ONE_TIME_HEADER") {
+		t.Fatal("fixture history missing")
+	}
+	if _, err := w.console.Write([]byte{12}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for !strings.Contains(string(w.console.Output()), "HISTORY_CLEARED") && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(string(w.console.Output()), "HISTORY_CLEARED") {
+		t.Fatal("fixture screen was not cleared")
+	}
+	v, err := newTerminalView(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { v.Close() })
+	go v.serve()
+	c := connectFixtureView(t, v, v.generation)
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var first viewFrame
+	if err := json.NewDecoder(c).Decode(&first); err != nil {
+		t.Fatal(err)
+	}
+	if !first.Ready || !strings.HasPrefix(string(first.Output), "\x1b[0m\x1b[2J\x1b[H") {
+		t.Fatalf("unsafe initial frame: %+v", first)
+	}
+	text := readUntil(t, c, "TICK:")
+	if strings.Contains(string(first.Output)+text, "ONE_TIME_HEADER") {
+		t.Fatal("historical terminal drawing replayed")
+	}
 }
 func connectFixtureView(t *testing.T, v *terminalView, gen string) net.Conn {
 	t.Helper()

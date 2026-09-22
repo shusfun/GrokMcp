@@ -122,7 +122,7 @@ func TestPlanRequiresApprove(t *testing.T) {
 func TestApproveThenComplete(t *testing.T) {
 	fake := agent.NewFake()
 	fake.PromptFn = func(_ string, text string) agent.PromptResult {
-		if strings.Contains(text, "plan mode") || strings.Contains(text, "User task") {
+		if strings.Contains(text, "Start in plan mode") || strings.Contains(text, "User task") {
 			return agent.PromptResult{PlanReady: true, Text: "plan"}
 		}
 		return agent.PromptResult{
@@ -136,21 +136,15 @@ func TestApproveThenComplete(t *testing.T) {
 	})
 	id := res.Jobs[0].JobID
 	waitState(t, s, id, protocol.StatePlanReady)
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
 		t.Fatal(err)
 	}
 	j := waitState(t, s, id, protocol.StateCompleted)
 	if j.LastSummary != "shipped" {
 		t.Fatal(j.LastSummary)
 	}
-	found := false
-	for _, p := range fake.PromptSnapshot() {
-		if strings.Contains(p, "The plan is approved") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("missing ApprovePrompt: %v", fake.PromptSnapshot())
+	if fake.PromptCount() != 1 || len(fake.Resolves) != 1 {
+		t.Fatalf("approval must resume the original prompt: prompts=%v decisions=%v", fake.PromptSnapshot(), fake.Resolves)
 	}
 }
 
@@ -173,7 +167,7 @@ func TestWorkingAutoContinues(t *testing.T) {
 	})
 	id := res.Jobs[0].JobID
 	waitState(t, s, id, protocol.StatePlanReady)
-	_, _ = s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove})
+	_, _ = decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove})
 	waitState(t, s, id, protocol.StateCompleted)
 	if n < 3 {
 		t.Fatalf("turns %d", n)
@@ -225,7 +219,7 @@ func TestCancelKeepsSession(t *testing.T) {
 func TestFollowupQueuesWhileBusy(t *testing.T) {
 	fake := agent.NewFake()
 	fake.PromptFn = func(_ string, text string) agent.PromptResult {
-		if strings.Contains(text, "plan mode") || strings.Contains(text, "User task") {
+		if strings.Contains(text, "Start in plan mode") || strings.Contains(text, "User task") {
 			return agent.PromptResult{PlanReady: true, Text: "plan"}
 		}
 		return agent.PromptResult{Text: protocol.RenderTaskState(protocol.TaskState{State: protocol.MarkerCompleted, Summary: "ok"})}
@@ -236,7 +230,7 @@ func TestFollowupQueuesWhileBusy(t *testing.T) {
 	})
 	id := res.Jobs[0].JobID
 	waitState(t, s, id, protocol.StatePlanReady)
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, s, id, protocol.StateCompleted)
@@ -665,10 +659,12 @@ func TestAttachWhenIdleProceedsAtPlanReady(t *testing.T) {
 func TestLiveAttachWaitsWhileBusy(t *testing.T) {
 	fake := agent.NewFake()
 	fake.Mode = "live"
+	block := make(chan struct{})
 	fake.PromptFn = func(_ string, text string) agent.PromptResult {
-		if strings.Contains(text, "plan mode") || strings.Contains(text, "User task") {
+		if strings.Contains(text, "Start in plan mode") || strings.Contains(text, "User task") {
 			return agent.PromptResult{PlanReady: true, Text: "plan"}
 		}
+		<-block
 		return agent.PromptResult{
 			Text: protocol.RenderTaskState(protocol.TaskState{State: protocol.MarkerCompleted, Summary: "done"}),
 		}
@@ -680,9 +676,7 @@ func TestLiveAttachWaitsWhileBusy(t *testing.T) {
 	})
 	id := res.Jobs[0].JobID
 	waitState(t, s, id, protocol.StatePlanReady)
-	block := make(chan struct{})
-	fake.PromptBlock["sess-1"] = block
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -747,7 +741,7 @@ func TestReviseIgnoresOldNeedsInputMarker(t *testing.T) {
 	id := res.Jobs[0].JobID
 	waitState(t, s, id, protocol.StatePlanReady)
 	old, _ := s.Status(context.Background(), id)
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "make it three steps"}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "make it three steps"}); err != nil {
 		t.Fatal(err)
 	}
 	close(hold)
@@ -789,11 +783,11 @@ func TestReviseThenApproveCompletes(t *testing.T) {
 	})
 	id := res.Jobs[0].JobID
 	waitState(t, s, id, protocol.StatePlanReady)
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "more"}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "more"}); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, s, id, protocol.StatePlanReady)
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, s, id, protocol.StateCompleted)
@@ -817,14 +811,14 @@ func TestReviseTwiceThenApproveCompletes(t *testing.T) {
 	})
 	id := res.Jobs[0].JobID
 	waitState(t, s, id, protocol.StatePlanReady)
-	_, _ = s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "v2"})
+	_, _ = decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "v2"})
 	waitState(t, s, id, protocol.StatePlanReady)
-	_, _ = s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "v3"})
+	_, _ = decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "v3"})
 	j := waitState(t, s, id, protocol.StatePlanReady)
 	if !strings.Contains(j.PlanSummary, "plan-vyyy") && !strings.Contains(j.PlanSummary, "plan-v") {
 		t.Fatalf("summary %q n=%d", j.PlanSummary, n)
 	}
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, s, id, protocol.StateCompleted)
@@ -841,11 +835,11 @@ func TestReviseThenCancel(t *testing.T) {
 	})
 	id := res.Jobs[0].JobID
 	waitState(t, s, id, protocol.StatePlanReady)
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "tweak"}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "tweak"}); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, s, id, protocol.StatePlanReady)
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanCancel}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanCancel}); err != nil {
 		t.Fatal(err)
 	}
 	j, _ := s.Status(context.Background(), id)
@@ -889,7 +883,7 @@ func TestReviseDoesNotRepublishOldPlan(t *testing.T) {
 	})
 	id := res.Jobs[0].JobID
 	waitState(t, s, id, protocol.StatePlanReady)
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "shorter"}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanRevise, Notes: "shorter"}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -951,7 +945,7 @@ func TestCloseAfterHeadedWindowsCwdUnblocksWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitView(t, s, id, protocol.ViewHeaded)
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -967,27 +961,14 @@ func TestCloseAfterHeadedWindowsCwdUnblocksWait(t *testing.T) {
 }
 
 func TestPumpTraceContainsSkipReason(t *testing.T) {
-	fake := agent.NewFake()
-	fake.PromptFn = func(string, string) agent.PromptResult {
-		return agent.PromptResult{PlanReady: true, Text: "plan"}
-	}
-	term := terminal.NewFake()
-	s := newTest(t, fake, term)
-	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
-		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
-	})
-	id := res.Jobs[0].JobID
-	waitState(t, s, id, protocol.StatePlanReady)
-	if _, err := s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
-		t.Fatal(err)
-	}
-	waitView(t, s, id, protocol.ViewHeaded)
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
+	s := newTest(t, agent.NewFake(), terminal.NewFake())
+	seedLifecycleJob(t, s, "trace", protocol.StateExecuting)
+	if _, err := s.Followup(context.Background(), protocol.FollowupRequest{JobID: "trace", Prompt: "queued while TUI owns input"}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		snap, err := s.DebugSnapshot(context.Background(), protocol.DebugSnapshotRequest{JobID: id, Limit: 200})
+		snap, err := s.DebugSnapshot(context.Background(), protocol.DebugSnapshotRequest{JobID: "trace", Limit: 200})
 		if err != nil {
 			t.Fatal(err)
 		}

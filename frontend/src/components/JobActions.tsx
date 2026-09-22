@@ -27,7 +27,7 @@ export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, o
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const planReady = job.state === "plan_ready";
+  const planReady = job.state === "plan_ready" && job.approval_delivery !== "expired";
   const turnControl = canControlTurn(job);
   const run = (fn: () => void | Promise<void>) => {
     if (busy) return;
@@ -39,11 +39,11 @@ export function JobActions({ job, onShowTui, onHeadless, onCancel, onContinue, o
     <div className="space-y-3">
       {planReady && onPlanDecide ? (
         <div className="space-y-2">
-          <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="审批备注（可选）" />
+          <Input value={notes} onChange={(e) => setNotes(e.target.value)} disabled={job.approval_supports_notes === false} placeholder={job.approval_supports_notes === false ? "此审批通道不支持备注" : "审批备注（可选）"} />
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={busy} onClick={() => run(() => onPlanDecide("approve", notes))}>批准</Button>
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => run(() => onPlanDecide("revise", notes))}>退回</Button>
-            <Button size="sm" variant="danger" disabled={busy} onClick={() => run(() => onPlanDecide("cancel", notes))}>取消任务</Button>
+            <Button size="sm" disabled={busy} onClick={() => run(() => onPlanDecide("approve", job.approval_supports_notes === false ? "" : notes))}>批准</Button>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => run(() => onPlanDecide("revise", job.approval_supports_notes === false ? "" : notes))}>退回</Button>
+            <Button size="sm" variant="danger" disabled={busy} onClick={() => run(() => onPlanDecide("cancel", job.approval_supports_notes === false ? "" : notes))}>取消任务</Button>
           </div>
         </div>
       ) : null}

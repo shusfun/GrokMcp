@@ -267,6 +267,11 @@ export const mockClient: Client = {
   async status(jobId) {
     return { ...find(jobId) };
   },
+  async readResult(jobId, requestId, turnId, offset = 0) {
+    const job = find(jobId);
+    const body = job.last_summary ?? "示例最终回答";
+    return { ...job, result: {request_id: requestId, turn_id: turnId ?? "mock-turn", text: body.slice(offset), offset, next_offset: body.length, total: body.length, has_more: false} };
+  },
   async events(jobId) {
     const job = find(jobId);
     return [{ id: 1, job_id: jobId, event_type: job.state, summary: job.last_action ?? "", created_at: job.updated_at }] satisfies BoundaryEvent[];
@@ -281,15 +286,19 @@ export const mockClient: Client = {
     emit();
     return { ...job };
   },
-  async cancelTurn(jobId) {
+  async cancelTurn(jobId, turnId) {
     const job = find(jobId);
+    if (turnId && turnId !== job.active_turn_id) throw new Error("stale turn cancellation");
     job.state = "needs_input";
     job.last_action = "Turn cancelled";
     emit();
     return { ...job };
   },
-  async planDecide(jobId, decide, notes) {
+  async planDecide(jobId, decide, notes, binding) {
     const job = find(jobId);
+    if (job.state !== "plan_ready") throw new Error("job is not waiting for a plan decision");
+    if (binding && (binding.approval_id !== job.approval_id || binding.request_id !== job.request_id || binding.plan_turn_id !== job.plan_turn_id || binding.plan_version !== job.plan_version)) throw new Error("stale plan decision");
+    job.approved = decide === "approve";
     if (decide === "cancel") {
       job.state = "cancelled";
       job.last_action = "Cancelled";

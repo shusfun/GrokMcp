@@ -7,6 +7,7 @@ import (
 	"golang.org/x/sys/windows"
 	"os"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -14,6 +15,7 @@ type consolePlatform struct{ state *consoleState }
 type consoleState struct {
 	mu      sync.Mutex
 	hpc     windows.Handle
+	size    windows.Coord
 	in, out *os.File
 }
 
@@ -40,7 +42,7 @@ func NewConsole(cols, rows int) (*Console, error) {
 		outR.Close()
 		return nil, err
 	}
-	return newConsole(consolePlatform{state: &consoleState{hpc: hpc, in: inW, out: outR}}), nil
+	return newConsole(consolePlatform{state: &consoleState{hpc: hpc, in: inW, out: outR, size: windows.Coord{X: int16(cols), Y: int16(rows)}}}), nil
 }
 func (p consolePlatform) read(b []byte) (int, error)  { return p.state.out.Read(b) }
 func (p consolePlatform) write(b []byte) (int, error) { return p.state.in.Write(b) }
@@ -53,7 +55,33 @@ func (p consolePlatform) resize(cols, rows int) error {
 	if p.state.hpc == 0 {
 		return os.ErrClosed
 	}
-	return windows.ResizePseudoConsole(p.state.hpc, windows.Coord{X: int16(cols), Y: int16(rows)})
+	size := windows.Coord{X: int16(cols), Y: int16(rows)}
+	if err := windows.ResizePseudoConsole(p.state.hpc, size); err != nil {
+		return err
+	}
+	p.state.size = size
+	return nil
+}
+
+func (p consolePlatform) refresh() error {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	if p.state.hpc == 0 {
+		return os.ErrClosed
+	}
+	original := p.state.size
+	temporary := original
+	if temporary.X < 1000 {
+		temporary.X++
+	} else {
+		temporary.X--
+	}
+	if err := windows.ResizePseudoConsole(p.state.hpc, temporary); err != nil {
+		return err
+	}
+	// 让 TUI 处理尺寸事件，再恢复真实大小；不注入键盘，也不回放旧控制序列。
+	time.Sleep(40 * time.Millisecond)
+	return windows.ResizePseudoConsole(p.state.hpc, original)
 }
 func (p consolePlatform) closeConsole() {
 	p.state.mu.Lock()

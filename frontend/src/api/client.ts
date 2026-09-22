@@ -151,12 +151,13 @@ export type Client = {
   unarchiveJob(jobId: string): Promise<Job>;
   deleteJob(jobId: string): Promise<void>;
   status(jobId: string): Promise<Job>;
+  readResult(jobId: string, requestId: string, turnId?: string, offset?: number): Promise<Job>;
   events(jobId: string): Promise<BoundaryEvent[]>;
   statusBar(): Promise<StatusBar>;
   setView(jobId: string, view: string): Promise<Job>;
-  cancelTurn(jobId: string): Promise<Job>;
+  cancelTurn(jobId: string, turnId?: string): Promise<Job>;
   continueJob(jobId: string): Promise<Job>;
-  planDecide(jobId: string, decide: "approve" | "revise" | "cancel", notes?: string): Promise<Job>;
+  planDecide(jobId: string, decide: "approve" | "revise" | "cancel", notes?: string, binding?: Pick<Job, "approval_id" | "request_id" | "plan_turn_id" | "plan_version">): Promise<Job>;
   openTerminal(jobId: string, dashboard?: boolean): Promise<void>;
   openProject(jobId: string): Promise<void>;
   settings(): Promise<Settings>;

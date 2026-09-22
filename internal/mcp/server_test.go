@@ -19,7 +19,7 @@ func (stub) Dispatch(context.Context, protocol.DispatchRequest) (protocol.Dispat
 	return protocol.DispatchResult{Jobs: []protocol.Job{{JobID: "j1", State: protocol.StateStarting, ViewMode: protocol.ViewHeadless}}}, nil
 }
 func (stub) Wait(context.Context, protocol.WaitRequest) (protocol.WaitResult, error) {
-	return protocol.WaitResult{}, nil
+	return protocol.WaitResult{Reason: "report_due", Cursors: map[string]int64{}, Jobs: []protocol.Job{}}, nil
 }
 func (stub) PlanDecide(context.Context, protocol.PlanDecideRequest) (protocol.Job, error) {
 	return protocol.Job{}, nil
@@ -27,12 +27,16 @@ func (stub) PlanDecide(context.Context, protocol.PlanDecideRequest) (protocol.Jo
 func (stub) Followup(context.Context, protocol.FollowupRequest) (protocol.Job, error) {
 	return protocol.Job{}, nil
 }
-func (stub) CancelTurn(context.Context, string) (protocol.Job, error) { return protocol.Job{}, nil }
+func (stub) CancelTurn(context.Context, string, ...string) (protocol.Job, error) {
+	return protocol.Job{}, nil
+}
 func (stub) SetView(context.Context, protocol.SetViewRequest) (protocol.Job, error) {
 	return protocol.Job{}, nil
 }
-func (stub) Status(context.Context, string) (protocol.Job, error) { return protocol.Job{}, nil }
-func (stub) ListJobs(context.Context) ([]protocol.Job, error)     { return nil, nil }
+func (stub) Status(context.Context, string, ...protocol.ResultQuery) (protocol.Job, error) {
+	return protocol.Job{}, nil
+}
+func (stub) ListJobs(context.Context) ([]protocol.Job, error) { return nil, nil }
 func (stub) ListJobsPage(context.Context, protocol.ListJobsQuery) (protocol.JobPage, error) {
 	return protocol.JobPage{}, nil
 }
@@ -140,7 +144,7 @@ func (r *recorder) Wait(_ context.Context, req protocol.WaitRequest) (protocol.W
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.wait = append(r.wait, req)
-	return protocol.WaitResult{}, nil
+	return protocol.WaitResult{Reason: "report_due", Cursors: map[string]int64{}, Jobs: []protocol.Job{}}, nil
 }
 
 func (r *recorder) PlanDecide(_ context.Context, req protocol.PlanDecideRequest) (protocol.Job, error) {
@@ -150,7 +154,7 @@ func (r *recorder) PlanDecide(_ context.Context, req protocol.PlanDecideRequest)
 	return protocol.Job{}, nil
 }
 
-func (r *recorder) Status(_ context.Context, jobID string) (protocol.Job, error) {
+func (r *recorder) Status(_ context.Context, jobID string, options ...protocol.ResultQuery) (protocol.Job, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.status = append(r.status, jobID)
@@ -247,7 +251,7 @@ func TestToolInputSchemaRequired(t *testing.T) {
 	want := map[string][]string{
 		"grok_dispatch":        {"tasks"},
 		"grok_wait":            {"job_ids"},
-		"grok_plan_decide":     {"job_id", "decide"},
+		"grok_plan_decide":     {"approval_id", "request_id", "turn_id", "plan_version", "job_id", "decide"},
 		"grok_followup":        {"job_id", "prompt"},
 		"grok_cancel_turn":     {"job_id"},
 		"grok_set_view":        {"job_id", "view"},
@@ -384,7 +388,7 @@ func TestOptionalToolArgsReachBackend(t *testing.T) {
 
 	callTool(t, cs, "grok_status", map[string]any{})
 	callTool(t, cs, "grok_wait", map[string]any{"job_ids": []string{"j1"}})
-	callTool(t, cs, "grok_plan_decide", map[string]any{"job_id": "j1", "decide": "approve"})
+	callTool(t, cs, "grok_plan_decide", map[string]any{"job_id": "j1", "decide": "approve", "approval_id": "a1", "request_id": "r1", "turn_id": "t1", "plan_version": 1})
 	callTool(t, cs, "grok_dispatch", map[string]any{"tasks": []any{map[string]any{"prompt": "do it"}}})
 	callTool(t, cs, "grok_open_terminal", map[string]any{"dashboard": true})
 

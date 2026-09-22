@@ -81,7 +81,7 @@ func viewerConsole() (*os.File, *os.File, func(), error) {
 		term.Restore(int(in.Fd()), state)
 		return nil, nil, nil, err
 	}
-	if err = windows.SetConsoleMode(windows.Handle(out.Fd()), outMode|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING); err != nil {
+	if err = configureViewerOutput(windows.Handle(out.Fd()), outMode); err != nil {
 		term.Restore(int(in.Fd()), state)
 		return nil, nil, nil, err
 	}
@@ -93,4 +93,9 @@ func viewerConsole() (*os.File, *os.File, func(), error) {
 		_ = term.Restore(int(in.Fd()), state)
 		_ = windows.SetConsoleMode(windows.Handle(out.Fd()), outMode)
 	}, nil
+}
+
+func configureViewerOutput(handle windows.Handle, original uint32) error {
+	// ConPTY 已包含光标定位；末列必须延迟换行，避免多滚一行后留下残影。
+	return windows.SetConsoleMode(handle, original|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING|windows.DISABLE_NEWLINE_AUTO_RETURN)
 }

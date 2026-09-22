@@ -327,16 +327,8 @@ func (v *terminalView) serveConnection(c net.Conn, scan *bufio.Scanner) {
 		_ = c.SetWriteDeadline(time.Now().Add(2 * time.Second))
 		return json.NewEncoder(c).Encode(f)
 	}
-	history, ch, off := v.worker.console.Subscribe()
+	_, ch, off := v.worker.console.Subscribe()
 	defer off()
-	if send(viewFrame{Output: []byte("\r\n[终端已连接。关闭窗口不会停止后台任务。]\r\n")}) != nil {
-		return
-	}
-	if len(history) > 0 {
-		if send(viewFrame{Output: history}) != nil {
-			return
-		}
-	}
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
@@ -377,12 +369,19 @@ func (v *terminalView) serveConnection(c net.Conn, scan *bufio.Scanner) {
 			return
 		case <-ready:
 			ready = nil
-			if send(viewFrame{Ready: true}) != nil {
+			reset := append([]byte("\x1b[0m\x1b[2J\x1b[H"), v.worker.console.Modes()...)
+			if send(viewFrame{Ready: true, Output: reset}) != nil {
+				return
+			}
+			if v.worker.console.Refresh() != nil {
 				return
 			}
 		case part, ok := <-ch:
 			if !ok {
 				return
+			}
+			if ready != nil {
+				continue
 			}
 			if send(viewFrame{Output: part}) != nil {
 				return

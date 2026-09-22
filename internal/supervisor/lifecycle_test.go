@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -79,7 +80,20 @@ func TestColdStartAndStatusNeverStartOrDiagnoseAgent(t *testing.T) {
 	if len(f.NewCalls) != 0 || len(f.LoadSnapshot()) != 1 || f.LoadSnapshot()[0][:len("original-running")] != "original-running" {
 		t.Fatalf("did not resume original: %v", f.LoadSnapshot())
 	}
-	if _, err := s.PlanDecide(context.Background(), protocol.PlanDecideRequest{JobID: "approval", Decide: protocol.PlanApprove}); err != nil {
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: "approval", Decide: protocol.PlanApprove}); err == nil {
+		t.Fatal("restored record must not impersonate a live permission")
+	}
+	f.PromptFn = func(_ string, text string) agent.PromptResult {
+		if strings.Contains(text, "The plan is approved") {
+			return agent.PromptResult{Text: protocol.RenderTaskState(protocol.TaskState{State: protocol.MarkerCompleted, Summary: "done"})}
+		}
+		return agent.PromptResult{PlanReady: true, Text: "keep plan"}
+	}
+	if _, err := s.Continue(context.Background(), "approval"); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, s, "approval", protocol.StatePlanReady)
+	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: "approval", Decide: protocol.PlanApprove}); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, s, "approval", protocol.StateCompleted)
