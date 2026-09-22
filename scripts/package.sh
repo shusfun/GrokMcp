@@ -127,7 +127,10 @@ PY
 		echo "Inno Setup compiler not found: $iscc" >&2
 		exit 1
 	}
-	"$iscc" "/DMyAppVersion=$VERSION" "/DSourceDir=$outdir" "/DOutputDir=$DIST_DIR" "build/windows/GrokMcp.iss"
+	iss_file="$(cd build/windows && pwd -W)/GrokMcp.iss"
+	source_dir="$(cd "$outdir" && pwd -W)"
+	output_dir="$(cd "$DIST_DIR" && pwd -W)"
+	"$iscc" "/DMyAppVersion=$VERSION" "/DSourceDir=$source_dir" "/DOutputDir=$output_dir" "$iss_file"
 	[ -f "$installer" ] || {
 		echo "Inno Setup did not create $installer" >&2
 		exit 1
