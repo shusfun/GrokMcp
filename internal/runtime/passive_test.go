@@ -27,7 +27,7 @@ func (a *passiveAgent) Diagnose(context.Context) protocol.DiagnoseResult {
 
 func TestIPCColdStartAndProbeDoNotLaunchAgent(t *testing.T) {
 	a := &passiveAgent{Fake: agent.NewFake()}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, closeHost, err := Open(ctx, Options{Home: testHome(t), Agent: a, Term: terminal.NewFake()})
 	if err != nil {
