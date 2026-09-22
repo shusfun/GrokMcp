@@ -129,7 +129,7 @@ PY
 	}
 	(
 		cd build/windows
-		"$iscc" "/DMyAppVersion=$VERSION" "GrokMcp.iss"
+\t\tMSYS_NO_PATHCONV=1 "$iscc" "/DMyAppVersion=$VERSION" "GrokMcp.iss"
 	)
 	[ -f "$installer" ] || {
 		echo "Inno Setup did not create $installer" >&2
