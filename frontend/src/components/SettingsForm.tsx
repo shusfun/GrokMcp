@@ -42,21 +42,9 @@ export function SettingsForm({
       </label>
       <label className="block text-sm text-[var(--muted)]">
         终端命令模板
-        <Input className="mt-1" value={value.terminal_command_template} onChange={(e) => onChange({ ...value, terminal_command_template: e.target.value })} placeholder="{command}  {cwd}  {session_id}  {grok}" />
+        <Input className="mt-1" value={value.terminal_command_template} onChange={(e) => onChange({ ...value, terminal_command_template: e.target.value })} placeholder="{command}（查看客户端）  {cwd}  {session_id}" />
       </label>
-      <label className="block text-sm text-[var(--muted)]">
-        默认形态
-        <Select
-          className="mt-1 w-full"
-          aria-label="默认形态"
-          value={value.default_view_mode}
-          options={[
-            { value: "headless", label: "无头" },
-            { value: "headed", label: "有头" },
-          ]}
-          onChange={(default_view_mode) => onChange({ ...value, default_view_mode })}
-        />
-      </label>
+      <p className="text-sm text-[var(--muted)]">任务始终在后台运行。需要查看或交互时，主动打开对应任务的终端。</p>
       <div className="space-y-2">
         <p className="text-sm text-[var(--muted)]">调试模式</p>
         <Segmented

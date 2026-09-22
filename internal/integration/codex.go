@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"grokmcp/internal/protocol"
+	"grokmcp/internal/silent"
 )
 
 type codexServer struct {
@@ -272,6 +273,7 @@ func (s *Service) run(ctx context.Context, name string, args ...string) (string,
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	silent.Hide(cmd)
 	err := cmd.Run()
 	return stdout.String(), stderr.String(), err
 }

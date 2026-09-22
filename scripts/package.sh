@@ -50,7 +50,6 @@ build_frontend() {
 }
 
 stage_clean() {
-	rm -rf "$DIST_DIR"
 	mkdir -p "$DIST_DIR"
 }
 
@@ -120,7 +119,7 @@ PY
 	fi
 	echo "wrote $zipfile"
 
-	installer="$DIST_DIR/${BIN_NAME}-${VERSION}-windows-amd64.exe"
+	installer="$DIST_DIR/${BIN_NAME}-${VERSION}-windows-amd64-installer.exe"
 	rm -f "$installer"
 	iscc="${ISCC:-iscc}"
 	command -v "$iscc" >/dev/null 2>&1 || {

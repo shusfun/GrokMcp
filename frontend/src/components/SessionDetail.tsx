@@ -40,6 +40,8 @@ export function SessionDetail({ jobId }: { jobId: string }) {
         <DurationText seconds={job.elapsed_seconds} />
       </div>
       <p className="mt-1 text-xs text-[var(--muted)]">{job.project} · {job.cwd}</p>
+      {job.state === "disconnected" ? <p className="mt-3 text-sm text-[var(--muted)]">任务未自动恢复。点击“继续”将加载原会话。</p> : null}
+      {job.view_mode === "headless" && job.input_owner === "tui" ? <p className="mt-3 text-sm text-[var(--muted)]">交互会话仍在后台运行。重新打开终端可继续操作；退出 Grok TUI 后将执行排队请求。</p> : null}
       <p className="mt-3 text-sm">最近动作：{job.last_action ?? "—"}</p>
       {job.last_summary ? <p className="mt-1 text-sm text-[var(--muted)]">{job.last_summary}</p> : null}
       <div className="mt-4">

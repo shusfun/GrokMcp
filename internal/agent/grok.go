@@ -10,10 +10,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/google/uuid"
+
 	"grokmcp/internal/grokbin"
+	"grokmcp/internal/ownedprocess"
 	"grokmcp/internal/paths"
 	"grokmcp/internal/protocol"
 	"grokmcp/internal/trace"
@@ -33,19 +36,32 @@ type exitPlanExtReq struct {
 }
 
 type Grok struct {
-	Bin     string
-	Finder  grokbin.Finder
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	conn    *acp.ClientSideConnection
-	client  *acpClient
-	last    map[string]string
-	plan    map[string]bool
-	pending map[string]chan planChoice
-	arm     map[string]planChoice
-	attach  string
-	planFn  func(string, string)
-	trace   trace.Sink
+	leaderConsole   *ownedprocess.Console
+	Bin             string
+	Finder          grokbin.Finder
+	mu              sync.Mutex
+	process         *ownedprocess.Process
+	leader          *ownedprocess.Process
+	group           *ownedprocess.Group
+	streams         []*os.File
+	initializing    *connectionAttempt
+	closed          bool
+	loaded          map[string]bool
+	loadMu          sync.Mutex
+	resourceMu      sync.Mutex
+	diagMu          sync.Mutex
+	connectTimeout  time.Duration
+	startConnection func(context.Context) (*connectionResources, error)
+	conn            *acp.ClientSideConnection
+	client          *acpClient
+	last            map[string]string
+	plan            map[string]bool
+	pending         map[string]chan planChoice
+	arm             map[string]planChoice
+	attach          string
+	planFn          func(string, string)
+	trace           trace.Sink
+	disconnectFn    func()
 }
 
 func NewGrok(bin string, finder grokbin.Finder) *Grok {
@@ -81,107 +97,23 @@ func (g *Grok) AttachMode() string {
 }
 
 func (g *Grok) Diagnose(ctx context.Context) protocol.DiagnoseResult {
-	d := g.Finder.Diagnose(ctx, g.Bin)
+	if !g.diagMu.TryLock() {
+		return protocol.DiagnoseResult{Error: "诊断正在进行，请稍后重试"}
+	}
+	defer g.diagMu.Unlock()
+	g.mu.Lock()
+	bin := g.Bin
+	g.mu.Unlock()
+	d := g.Finder.Diagnose(ctx, bin)
+	if socket, err := paths.SupervisorLeaderSocket(); err == nil {
+		d.LeaderSocket = socket
+	}
 	d.AttachMode = g.AttachMode()
+	d.LeaderRunning = g.ConnectionState().LeaderRunning
 	g.mu.Lock()
 	d.ACPOK = g.conn != nil
 	g.mu.Unlock()
 	return d
-}
-
-func (g *Grok) EnsureLeader(ctx context.Context) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.conn != nil {
-		return nil
-	}
-	bin := g.Bin
-	if bin == "" {
-		var err error
-		bin, err = g.Finder.Resolve("")
-		if err != nil {
-			return err
-		}
-		g.Bin = bin
-	}
-	if err := g.ensureLeaderProcess(bin); err != nil {
-		return err
-	}
-	cmd := exec.CommandContext(ctx, bin, "agent", "--leader", "stdio")
-	cmd.Stderr = os.Stderr
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	client := newACPClient()
-	client.onUpdate = func(sessionID, lastAction string, planReady bool) {
-		g.mu.Lock()
-		if lastAction != "" {
-			g.last[sessionID] = lastAction
-		}
-		if planReady {
-			g.plan[sessionID] = true
-		}
-		g.mu.Unlock()
-		if lastAction != "" {
-			g.emitTrace(sessionID, trace.LevelDebug, "acp.session_update", lastAction, map[string]any{"action": lastAction, "plan_ready": planReady})
-		}
-	}
-	client.onPermission = g.handlePermission
-	client.onExitPlan = g.handleExitPlanMode
-	conn := acp.NewClientSideConnection(client, stdin, stdout)
-	if _, err := conn.Initialize(ctx, acp.InitializeRequest{
-		ProtocolVersion: acp.ProtocolVersionNumber,
-		ClientCapabilities: acp.ClientCapabilities{
-			Fs: acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
-		},
-		ClientInfo: &acp.Implementation{Name: "Grok Supervisor", Version: "0.1.0"},
-	}); err != nil {
-		_ = cmd.Process.Kill()
-		return err
-	}
-	g.cmd = cmd
-	g.conn = conn
-	g.client = client
-	g.mu.Unlock()
-	g.emitTrace("", trace.LevelInfo, "leader.connected", "ACP leader connected", nil)
-	go func() {
-		_ = cmd.Wait()
-		g.mu.Lock()
-		if g.cmd == cmd {
-			g.conn = nil
-			g.cmd = nil
-		}
-		g.mu.Unlock()
-		g.emitTrace("", trace.LevelWarn, "leader.disconnected", "ACP leader disconnected", nil)
-	}()
-	g.probeAttach(ctx)
-	g.mu.Lock()
-	return nil
-}
-
-func (g *Grok) ensureLeaderProcess(bin string) error {
-	sock := paths.LeaderSocket()
-	if sock != "" {
-		if st, err := os.Stat(sock); err == nil && st.Mode()&os.ModeSocket != 0 {
-			return nil
-		}
-	}
-	cmd := exec.Command(bin, "agent", "leader", "--no-exit-on-disconnect")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() { _ = cmd.Wait() }()
-	return nil
 }
 
 func (g *Grok) NewSession(ctx context.Context, cwd string, worktree bool) (string, string, error) {
@@ -198,6 +130,9 @@ func (g *Grok) NewSession(ctx context.Context, cwd string, worktree bool) (strin
 	g.mu.Lock()
 	conn := g.conn
 	g.mu.Unlock()
+	if conn == nil {
+		return "", "", ErrDisconnected
+	}
 	resp, err := conn.NewSession(ctx, acp.NewSessionRequest{
 		Cwd:        cwd,
 		McpServers: []acp.McpServer{},
@@ -210,6 +145,14 @@ func (g *Grok) NewSession(ctx context.Context, cwd string, worktree bool) (strin
 	if err := setPlanMode(ctx, conn.SetSessionMode, resp.SessionId, resp.Modes); err != nil {
 		return "", "", err
 	}
+	g.mu.Lock()
+	if g.loaded == nil {
+		g.loaded = map[string]bool{}
+	}
+	if g.conn == conn {
+		g.loaded[id] = true
+	}
+	g.mu.Unlock()
 	return id, cwd, nil
 }
 
@@ -217,9 +160,30 @@ func (g *Grok) LoadSession(ctx context.Context, sessionID, cwd string) error {
 	if err := g.EnsureLeader(ctx); err != nil {
 		return err
 	}
+	return g.LoadConnectedSession(ctx, sessionID, cwd)
+}
+
+func (g *Grok) InvalidateSession(sessionID string) {
+	g.mu.Lock()
+	delete(g.loaded, sessionID)
+	g.mu.Unlock()
+}
+
+func (g *Grok) LoadConnectedSession(ctx context.Context, sessionID, cwd string) error {
+	g.loadMu.Lock()
+	defer g.loadMu.Unlock()
 	g.mu.Lock()
 	conn := g.conn
 	g.mu.Unlock()
+	if conn == nil {
+		return ErrDisconnected
+	}
+	g.mu.Lock()
+	loaded := g.loaded[sessionID]
+	g.mu.Unlock()
+	if loaded {
+		return nil
+	}
 	g.emitTrace(sessionID, trace.LevelInfo, "session.load.started", "load session", nil)
 	_, err := conn.LoadSession(ctx, acp.LoadSessionRequest{
 		SessionId:  acp.SessionId(sessionID),
@@ -230,19 +194,27 @@ func (g *Grok) LoadSession(ctx context.Context, sessionID, cwd string) error {
 		g.emitTrace(sessionID, trace.LevelError, "session.load.failed", err.Error(), map[string]any{"error": err.Error()})
 		return err
 	}
+	g.mu.Lock()
+	if g.loaded == nil {
+		g.loaded = map[string]bool{}
+	}
+	if g.conn == conn {
+		g.loaded[sessionID] = true
+	}
+	g.mu.Unlock()
 	g.emitTrace(sessionID, trace.LevelInfo, "session.load.completed", "load session", nil)
 	return nil
 }
 
 func (g *Grok) Prompt(ctx context.Context, sessionID, text string) (PromptResult, error) {
-	if err := g.EnsureLeader(ctx); err != nil {
-		return PromptResult{}, err
-	}
 	g.mu.Lock()
 	conn := g.conn
 	client := g.client
 	g.plan[sessionID] = false
 	g.mu.Unlock()
+	if conn == nil {
+		return PromptResult{}, ErrDisconnected
+	}
 	if client != nil {
 		client.resetText(sessionID)
 	}
@@ -411,16 +383,6 @@ func (g *Grok) SetPlanListener(fn func(string, string)) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.planFn = fn
-}
-
-func (g *Grok) Close() error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.cmd != nil && g.cmd.Process != nil {
-		_ = g.cmd.Process.Kill()
-	}
-	g.conn = nil
-	return nil
 }
 
 func isExitPlanCall(tc acp.ToolCallUpdate) bool {

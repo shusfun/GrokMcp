@@ -39,7 +39,7 @@ func CommandInDirWindows(cwd, command string) string {
 	if cwd == "" {
 		return command
 	}
-	return "cd /d " + cwd + " && " + command
+	return "cd /d " + shellQuote(cwd) + " && " + command
 }
 
 func shellSingleQuote(s string) string {

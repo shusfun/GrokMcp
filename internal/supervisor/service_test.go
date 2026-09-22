@@ -330,31 +330,22 @@ func TestSecondShowTUIFocuses(t *testing.T) {
 
 func TestRecoverLoadsSameSession(t *testing.T) {
 	fake := agent.NewFake()
-	fake.PromptFn = func(string, string) agent.PromptResult {
-		return agent.PromptResult{
-			Text: protocol.RenderTaskState(protocol.TaskState{State: protocol.MarkerWorking, Summary: "go"}),
-		}
-	}
 	s := newTest(t, fake, terminal.NewFake())
-	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
-		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
-	})
-	id := res.Jobs[0].JobID
-	waitState(t, s, id, protocol.StateExecuting)
-	s.Disconnect(id)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(fake.LoadSnapshot()) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	seedLifecycleJob(t, s, "recover", protocol.StateExecuting)
+	s.Disconnect("recover")
+	if len(fake.LoadSnapshot()) != 0 {
+		t.Fatal("disconnect must wait for explicit continue")
 	}
+	if _, err := s.Continue(context.Background(), "recover"); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, s, "recover", protocol.StateCompleted)
 	loads := fake.LoadSnapshot()
-	if len(loads) == 0 || !strings.HasPrefix(loads[0], "sess-1|") {
+	if len(loads) != 1 || !strings.HasPrefix(loads[0], "original-recover|") {
 		t.Fatalf("loads %v", loads)
 	}
-	j, _ := s.Status(context.Background(), id)
-	if j.GrokSessionID != "sess-1" {
+	j, _ := s.Status(context.Background(), "recover")
+	if j.GrokSessionID != "original-recover" {
 		t.Fatal(j.GrokSessionID)
 	}
 }
@@ -413,19 +404,12 @@ func TestRecoverLeavesPlanReady(t *testing.T) {
 	if err := s.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(fake.LoadSnapshot()) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 	j, _ := s.Status(context.Background(), id)
 	if j.State != protocol.StatePlanReady {
 		t.Fatalf("state %s", j.State)
 	}
-	if len(fake.LoadSnapshot()) == 0 {
-		t.Fatal("expected session/load for plan_ready recover")
+	if len(fake.LoadSnapshot()) != 0 {
+		t.Fatal("startup must not load a plan-ready session")
 	}
 	if fake.PromptCount() != planPrompts {
 		t.Fatalf("recover must not implement: %v", fake.PromptSnapshot())
@@ -930,39 +914,21 @@ func TestReviseDoesNotRepublishOldPlan(t *testing.T) {
 	}
 }
 
-func TestDispatchHeadedStillStartsPlan(t *testing.T) {
+func TestDispatchRejectsAutomaticHeadedDefault(t *testing.T) {
 	fake := agent.NewFake()
-	fake.PromptFn = func(string, string) agent.PromptResult {
-		return agent.PromptResult{PlanReady: true, LastAction: "Plan ready", Text: "plan"}
-	}
 	term := terminal.NewFake()
 	s := newTest(t, fake, term)
-	if err := s.SaveSettings(context.Background(), protocol.Settings{DefaultViewMode: string(protocol.ViewHeaded)}); err != nil {
-		t.Fatal(err)
+	if err := s.SaveSettings(context.Background(), protocol.Settings{DefaultViewMode: "headed"}); err == nil {
+		t.Fatal("headed default must be rejected")
 	}
-	res, err := s.Dispatch(context.Background(), protocol.DispatchRequest{
-		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "build runtime"}},
-	})
+	fake.PromptFn = func(string, string) agent.PromptResult { return agent.PromptResult{PlanReady: true, Text: "plan"} }
+	res, err := s.Dispatch(context.Background(), protocol.DispatchRequest{Cwd: t.TempDir(), Tasks: []protocol.DispatchTask{{Prompt: "x"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := res.Jobs[0].JobID
-	j := waitState(t, s, id, protocol.StatePlanReady)
-	if fake.PromptCount() == 0 {
-		t.Fatal("plan prompt never called")
-	}
-	if j.State == protocol.StatePlanning && j.ViewMode == protocol.ViewHeaded && j.InputOwner == protocol.OwnerTUI && !j.Busy {
-		t.Fatalf("stuck headed without plan: %+v", j)
-	}
-	done := make(chan error, 1)
-	go func() { done <- s.Close() }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Close hung after headed dispatch")
+	job := waitState(t, s, res.Jobs[0].JobID, protocol.StatePlanReady)
+	if term.ResumeCount() != 0 || job.DesiredViewMode != protocol.ViewHeadless {
+		t.Fatal("automatic terminal opened")
 	}
 }
 

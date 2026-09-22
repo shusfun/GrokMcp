@@ -17,7 +17,7 @@ func StageLabel(state JobState) string {
 	case StateNeedsInput:
 		return "需要输入"
 	case StateDisconnected:
-		return "已断连"
+		return "待手动恢复"
 	case StateRecovering:
 		return "恢复中"
 	case StateCancelled:

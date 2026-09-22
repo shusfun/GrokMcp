@@ -1,105 +1,98 @@
 package supervisor
 
-import (
-	"context"
-	"time"
+import "grokmcp/internal/protocol"
 
-	"grokmcp/internal/protocol"
-)
-
-func (s *Service) recoverJob(ctx context.Context, jobID string) {
-	rec, err := s.record(jobID)
+func (s *Service) connectionLost() {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return
+	}
+	jobs, err := s.store.ListJobs()
 	if err != nil {
 		return
+	}
+	if t, ok := s.term.(interface{ ReleaseWorkers() }); ok {
+		t.ReleaseWorkers()
+	}
+	for _, rec := range jobs {
+		if rec.Job.State.IsActive() || rec.Job.State == protocol.StatePlanReady || rec.Job.InputOwner == protocol.OwnerTUI {
+			s.Disconnect(rec.Job.JobID)
+		}
+	}
+	s.emitEvent(protocol.Event{Type: "connection"})
+}
+
+// 重启只恢复记录，原会话在用户操作时加载。
+func (s *Service) markAwaitingResume(jobID string) error {
+	rec, err := s.record(jobID)
+	if err != nil {
+		return err
 	}
 	job := rec.Job
 	if job.UserCancelled {
-		return
+		return nil
 	}
-	switch job.State {
-	case protocol.StatePlanReady:
-		if err := s.agent.EnsureLeader(ctx); err == nil && job.GrokSessionID != "" {
-			_ = s.agent.LoadSession(ctx, job.GrokSessionID, job.Cwd)
-		}
-		s.emit(job)
-		return
-	case protocol.StateNeedsInput, protocol.StateBlocked, protocol.StateCompleted, protocol.StateCancelled, protocol.StateFailed:
-		return
+	active := job.State.IsActive() || job.State == protocol.StateDisconnected
+	if !active && job.ViewMode == protocol.ViewHeadless && job.DesiredViewMode == protocol.ViewHeadless && job.InputOwner == protocol.OwnerSupervisor {
+		return nil
 	}
-
-	job.State = protocol.StateDisconnected
-	job.LastAction = "Disconnected"
+	if active {
+		job.State = protocol.StateDisconnected
+		job.LastAction = "等待手动恢复"
+	}
+	job.ViewMode = protocol.ViewHeadless
+	job.DesiredViewMode = protocol.ViewHeadless
+	job.InputOwner = protocol.OwnerSupervisor
 	s.touch(&job)
-	_ = s.store.AddEvent(job.JobID, string(protocol.StateDisconnected), "leader disconnected", s.clock.Now())
-	s.save(job)
-
-	backoffs := []time.Duration{200 * time.Millisecond, time.Second, 2 * time.Second}
-	var last error
-	for i, wait := range backoffs {
-		job.State = protocol.StateRecovering
-		s.touch(&job)
-		s.save(job)
-		if err := s.agent.EnsureLeader(ctx); err != nil {
-			last = err
-		} else if err := s.agent.LoadSession(ctx, job.GrokSessionID, job.Cwd); err != nil {
-			last = err
-		} else {
-			job, _ = s.load(jobID)
-			if job.UserCancelled {
-				return
-			}
-			job.State = protocol.StateExecuting
-			job.LastAction = "Recovered"
-			s.touch(&job)
-			s.save(job)
-			s.enqueue(jobID, queued{kind: "continue", text: protocol.ContinuePrompt()})
-			return
-		}
-		_ = last
-		if i == len(backoffs)-1 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			s.noteRecoverFail(jobID)
-			return
-		case <-time.After(wait):
-		}
+	rec.Job = job
+	if err := s.store.PutJob(rec); err != nil {
+		return err
 	}
-	s.noteRecoverFail(jobID)
-}
-
-func (s *Service) noteRecoverFail(jobID string) {
-	rec, err := s.record(jobID)
-	if err != nil {
-		return
-	}
-	now := s.clock.Now().Unix()
-	fails := append(rec.RecoverFails, now)
-	window := now - 10*60
-	kept := fails[:0]
-	for _, ts := range fails {
-		if ts >= window {
-			kept = append(kept, ts)
-		}
-	}
-	job := rec.Job
-	if len(kept) >= 2 {
-		job.State = protocol.StateNeedsInput
-		job.LastSummary = "recovery failed twice in 10 minutes"
-		job.LastAction = "Needs input"
-		s.touch(&job)
-		_ = s.put(job, rec.MissingMarkerCount, kept)
-		_ = s.store.AddEvent(job.JobID, string(protocol.StateNeedsInput), job.LastSummary, time.Unix(now, 0).UTC())
-		s.emit(job)
-		return
-	}
-	job.State = protocol.StateDisconnected
-	s.touch(&job)
-	_ = s.put(job, rec.MissingMarkerCount, kept)
 	s.emit(job)
+	return nil
 }
 
 func (s *Service) Disconnect(jobID string) {
-	s.goWatch(func() { s.recoverJob(context.Background(), jobID) })
+	s.disconnectWithError(jobID, "连接已断开，请手动继续")
+}
+
+func (s *Service) disconnectWithError(jobID, reason string) {
+	job, err := s.load(jobID)
+	if err != nil || job.UserCancelled {
+		return
+	}
+	rt := s.runtime(jobID)
+	s.mu.Lock()
+	rt.gen++
+	rt.queue = nil
+	if rt.cancel != nil {
+		rt.cancel()
+	}
+	h := rt.term
+	rt.term = nil
+	rt.viewRequested = false
+	rt.attachGen++
+	if rt.waitCancel != nil {
+		rt.waitCancel()
+		rt.waitCancel = nil
+	}
+	s.mu.Unlock()
+	if h != nil {
+		_ = h.Close()
+	}
+	{
+		job.ViewMode = protocol.ViewHeadless
+		job.DesiredViewMode = protocol.ViewHeadless
+		job.InputOwner = protocol.OwnerSupervisor
+	}
+	if job.State != protocol.StatePlanReady {
+		job.State = protocol.StateDisconnected
+	}
+	job.LastAction = "连接已断开，请手动继续"
+	job.LastSummary = reason
+	s.touch(&job)
+	_ = s.store.AddEvent(jobID, string(protocol.StateDisconnected), job.LastAction, s.clock.Now())
+	s.save(job)
 }

@@ -1,9 +1,20 @@
 name: release
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Draft release version (vX.Y.Z)"
+        required: true
+        default: "v0.1.23"
   push:
     tags:
       - "v*"
+
+env:
+  VERSION: ${{ inputs.version || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.version || github.ref_name }}
+  GROK_LIVE: "0"
 
 permissions:
   contents: write
@@ -70,12 +81,17 @@ jobs:
       - name: Package Windows
         shell: bash
         run: sh scripts/package.sh windows
+      - name: Verify Windows upgrade in isolated installation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: ./scripts/test-windows-upgrade.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
             dist/GrokMcp-*-windows-amd64.zip
-            dist/GrokMcp-*-windows-amd64.exe
+            dist/GrokMcp-*-windows-amd64-installer.exe
           if-no-files-found: error
 
   release:
@@ -92,7 +108,13 @@ jobs:
         working-directory: artifacts
         run: |
           sha256sum GrokMcp-* | sort > SHA256SUMS.txt
-          gh release create "$GITHUB_REF_NAME" GrokMcp-* SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" \
-            --generate-notes \
-            --title "$GITHUB_REF_NAME"
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release version"; exit 1; }
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft > /tmp/release-draft; then
+            [ "$(cat /tmp/release-draft)" = "true" ] || { echo "Refusing to overwrite a published release"; exit 1; }
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft
+            gh release upload "$RELEASE_TAG" GrokMcp-* SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" GrokMcp-* SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --draft --generate-notes --title "$RELEASE_TAG"
+          fi

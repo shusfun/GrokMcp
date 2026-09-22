@@ -18,6 +18,7 @@ export function SettingsPage() {
   const [note, setNote] = useState("");
   const [diagnose, setDiagnose] = useState<Diagnose | null>(null);
   const [diagError, setDiagError] = useState("");
+  const [diagnosing, setDiagnosing] = useState(false);
   const [version, setVersion] = useState("");
   const [updateNote, setUpdateNote] = useState("");
   const [checking, setChecking] = useState(false);
@@ -27,7 +28,6 @@ export function SettingsPage() {
   useEffect(() => {
     void client.settings().then(setValue);
     void client.appVersion().then(setVersion).catch(() => setVersion(""));
-    void client.diagnose().then(setDiagnose).catch((e: Error) => setDiagError(e.message));
   }, [client]);
 
   useEffect(() => {
@@ -86,6 +86,10 @@ export function SettingsPage() {
 
         <section id="diagnose" className="space-y-3">
           <h2 className="text-sm font-semibold">运行状况</h2>
+          <Button size="sm" variant="outline" disabled={diagnosing} onClick={() => {
+            setDiagnosing(true); setDiagError("");
+            void client.diagnose().then(setDiagnose).catch((e: Error) => setDiagError(e.message)).finally(() => setDiagnosing(false));
+          }}>{diagnosing ? "正在诊断…" : "运行诊断"}</Button>
           {diagError ? <p className="text-sm text-[var(--fail)]">{diagError}</p> : null}
           {diagnose && !diagnose.grok_path ? (
             <div className="space-y-2 rounded-md border border-[var(--line)] bg-[var(--row)] p-3">
@@ -107,7 +111,7 @@ export function SettingsPage() {
               {installLog ? <pre className="max-h-40 overflow-auto whitespace-pre-wrap text-xs text-[var(--muted)]">{installLog}</pre> : null}
             </div>
           ) : null}
-          {diagnose ? <DiagnoseList data={diagnose} /> : !diagError ? <p className="text-sm text-[var(--muted)]">诊断中…</p> : null}
+          {diagnose ? <DiagnoseList data={diagnose} /> : !diagError ? <p className="text-sm text-[var(--muted)]">诊断仅在点击后执行。启动应用不会自动运行 Grok 或恢复历史任务。</p> : null}
         </section>
 
         <section className="space-y-3">

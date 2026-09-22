@@ -87,6 +87,9 @@ func TestDeepLinkRoundTrip(t *testing.T) {
 	if q.Get("resource") != "mcp" || q.Get("apps") != "codex" {
 		t.Fatalf("query %v", q)
 	}
+	if q.Get("name") != "" {
+		t.Fatalf("MCP parser ignores name; got %q", q.Get("name"))
+	}
 	id, command, args, err := ParseDeepLinkConfig(link)
 	if err != nil {
 		t.Fatal(err)

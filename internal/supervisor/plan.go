@@ -12,12 +12,22 @@ import (
 )
 
 func (s *Service) PlanDecide(ctx context.Context, req protocol.PlanDecideRequest) (protocol.Job, error) {
+	finish, err := s.beginOperation(ctx)
+	if err != nil {
+		return protocol.Job{}, err
+	}
+	defer finish()
 	job, err := s.load(req.JobID)
 	if err != nil {
 		return protocol.Job{}, err
 	}
 	if job.State != protocol.StatePlanReady {
 		return protocol.Job{}, errors.New("job is not waiting for a plan decision")
+	}
+	if req.Decide != protocol.PlanCancel && s.isIdle(job.JobID) {
+		if err := s.agent.LoadSession(ctx, job.GrokSessionID, job.Cwd); err != nil {
+			return protocol.Job{}, err
+		}
 	}
 	switch req.Decide {
 	case protocol.PlanCancel:
@@ -37,7 +47,7 @@ func (s *Service) PlanDecide(ctx context.Context, req protocol.PlanDecideRequest
 		job.LastAction = "Revising plan"
 		s.touch(&job)
 		s.save(job)
-		s.enqueue(job.JobID, queued{kind: "revise", text: protocol.RevisePrompt(req.Notes)})
+		s.enqueue(job.JobID, queued{connect: true, kind: "revise", text: protocol.RevisePrompt(req.Notes)})
 		return s.snapshot(job.JobID), nil
 	case protocol.PlanApprove:
 		s.bumpGen(job.JobID)
@@ -49,7 +59,7 @@ func (s *Service) PlanDecide(ctx context.Context, req protocol.PlanDecideRequest
 			s.touch(&job)
 			s.save(job)
 		}
-		s.enqueue(job.JobID, queued{kind: "approve", text: protocol.ApprovePrompt(req.Notes)})
+		s.enqueue(job.JobID, queued{connect: true, kind: "approve", text: protocol.ApprovePrompt(req.Notes)})
 		return s.snapshot(job.JobID), nil
 	default:
 		return protocol.Job{}, errors.New("invalid plan decision")

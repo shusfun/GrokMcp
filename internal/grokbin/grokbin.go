@@ -1,7 +1,6 @@
 package grokbin
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"grokmcp/internal/ownedprocess"
 	"grokmcp/internal/paths"
 	"grokmcp/internal/protocol"
 )
@@ -24,12 +24,8 @@ func New() Finder {
 	return Finder{
 		LookPath: exec.LookPath,
 		Run: func(ctx context.Context, bin string, args ...string) (string, error) {
-			cmd := exec.CommandContext(ctx, bin, args...)
-			var out bytes.Buffer
-			cmd.Stdout = &out
-			cmd.Stderr = &out
-			err := cmd.Run()
-			return out.String(), err
+			out, err := ownedprocess.CombinedOutput(ctx, ownedprocess.Spec{Path: bin, Args: args})
+			return string(out), err
 		},
 	}
 }

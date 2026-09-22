@@ -22,30 +22,33 @@ import (
 var errNotFound = errors.New("job not found")
 
 type queued struct {
-	kind   string
-	text   string
-	repair bool
-	gen    uint64
-	turnID string
+	connect bool
+	kind    string
+	text    string
+	repair  bool
+	gen     uint64
+	turnID  string
 }
 
 type runtime struct {
-	busy          bool
-	queue         []queued
-	cancel        context.CancelFunc
-	promptCh      chan struct{}
-	term          terminal.Handle
-	waitCancel    context.CancelFunc
-	attaching     bool
-	attachDone    chan struct{}
-	attachErr     error
-	attachGen     uint64
-	gen           uint64
-	turnSeq       uint64
-	turnID        string
-	stalled       bool
-	stalledReason string
-	stallSince    map[string]time.Time
+	viewRequested    bool
+	workerGeneration string
+	busy             bool
+	queue            []queued
+	cancel           context.CancelFunc
+	promptCh         chan struct{}
+	term             terminal.Handle
+	waitCancel       context.CancelFunc
+	attaching        bool
+	attachDone       chan struct{}
+	attachErr        error
+	attachGen        uint64
+	gen              uint64
+	turnSeq          uint64
+	turnID           string
+	stalled          bool
+	stalledReason    string
+	stallSince       map[string]time.Time
 }
 
 type Service struct {
@@ -57,15 +60,20 @@ type Service struct {
 	grokPath func() string
 	traces   *trace.Log
 
-	mu        sync.Mutex
-	rt        map[string]*runtime
-	subs      map[int]func(protocol.Event)
-	subSeq    int
-	mcpN      int
-	closed    bool
-	stopWatch chan struct{}
-	pumps     sync.WaitGroup
-	watchers  sync.WaitGroup
+	mu               sync.Mutex
+	rt               map[string]*runtime
+	subs             map[int]func(protocol.Event)
+	subSeq           int
+	mcpN             int
+	closed           bool
+	stopWatch        chan struct{}
+	pumps            sync.WaitGroup
+	watchers         sync.WaitGroup
+	activeOperations int
+	operations       sync.WaitGroup
+	idleSince        time.Time
+	idleDone         chan struct{}
+	idleTimeout      time.Duration
 }
 
 func New(st *store.Store, ag agent.Agent, term terminal.Launcher, clk clock.Clock, idg ids.Generator) *Service {
@@ -82,6 +90,12 @@ func New(st *store.Store, ag agent.Agent, term terminal.Launcher, clk clock.Cloc
 	}
 	if ag != nil {
 		ag.SetPlanListener(func(sessionID, excerpt string) { s.onPlanReady(sessionID, excerpt) })
+	}
+	if a, ok := ag.(interface{ SetDisconnectListener(func()) }); ok {
+		a.SetDisconnectListener(s.connectionLost)
+	}
+	if t, ok := term.(interface{ SetWorkerExitListener(func(string, string)) }); ok {
+		t.SetWorkerExitListener(s.terminalWorkerExited)
 	}
 	return s
 }
@@ -147,9 +161,8 @@ func (s *Service) Start(ctx context.Context) error {
 		if rec.Job.UserCancelled {
 			continue
 		}
-		if rec.Job.State.IsActive() || rec.Job.State == protocol.StateDisconnected || rec.Job.State == protocol.StatePlanReady {
-			id := rec.Job.JobID
-			s.goWatch(func() { s.recoverJob(ctx, id) })
+		if err := s.markAwaitingResume(rec.Job.JobID); err != nil {
+			return err
 		}
 	}
 	s.goWatch(s.watchLoop)
@@ -184,13 +197,14 @@ func (s *Service) Close() error {
 	for _, h := range handles {
 		_ = h.Close()
 	}
-	if f, ok := s.term.(*terminal.Fake); ok {
+	if f, ok := s.term.(interface{ CloseAll() }); ok {
 		f.CloseAll()
 	}
 	var agentErr error
 	if s.agent != nil {
 		agentErr = s.agent.Close()
 	}
+	s.operations.Wait()
 	s.pumps.Wait()
 	s.watchers.Wait()
 	return agentErr
@@ -211,6 +225,11 @@ func (s *Service) goWatch(fn func()) {
 }
 
 func (s *Service) Dispatch(ctx context.Context, req protocol.DispatchRequest) (protocol.DispatchResult, error) {
+	finish, err := s.beginOperation(ctx)
+	if err != nil {
+		return protocol.DispatchResult{}, err
+	}
+	defer finish()
 	if len(req.Tasks) == 0 {
 		return protocol.DispatchResult{}, errors.New("tasks is required")
 	}
@@ -287,12 +306,7 @@ func (s *Service) startJob(ctx context.Context, job protocol.Job, task protocol.
 	}
 	job.State = protocol.StatePlanning
 	job.LastAction = "Planning"
-	st, _ := s.store.Settings()
-	if st.DefaultViewMode == string(protocol.ViewHeaded) {
-		job.DesiredViewMode = protocol.ViewHeaded
-	} else {
-		job.DesiredViewMode = protocol.ViewHeadless
-	}
+	job.DesiredViewMode = protocol.ViewHeadless
 	s.touch(&job)
 	_ = s.put(job, 0, nil)
 	s.emitTrace(job, "info", trace.SourceSupervisor, "job.created", "job started", nil)
@@ -333,9 +347,9 @@ func (s *Service) StatusBar(ctx context.Context) (protocol.StatusBar, error) {
 	mcpOK := s.mcpN > 0
 	s.mu.Unlock()
 	bar := protocol.StatusBar{MCPOK: mcpOK, DBOK: s.store.Ping() == nil}
-	diag := s.agent.Diagnose(ctx)
+	diag := s.agent.ConnectionState()
 	bar.LeaderOK = diag.LeaderRunning
-	bar.ACPOK = diag.ACPOK || diag.LeaderRunning
+	bar.ACPOK = diag.ACPOK
 	if s.traces != nil {
 		bar.DebugEnabled = s.traces.Global().Enabled
 	}
@@ -362,6 +376,9 @@ func (s *Service) Settings(context.Context) (protocol.Settings, error) {
 }
 
 func (s *Service) SaveSettings(_ context.Context, st protocol.Settings) error {
+	if st.DefaultViewMode != "" && st.DefaultViewMode != string(protocol.ViewHeadless) {
+		return errors.New("自动显示终端已停用，请主动点击显示 TUI")
+	}
 	if st.DefaultViewMode == "" {
 		st.DefaultViewMode = string(protocol.ViewHeadless)
 	}
@@ -505,13 +522,16 @@ func (s *Service) fail(job protocol.Job, reason string) protocol.Job {
 
 func (s *Service) emit(job protocol.Job) {
 	job = s.decorate(job)
+	s.emitEvent(protocol.Event{Type: "job", Job: &job})
+}
+
+func (s *Service) emitEvent(ev protocol.Event) {
 	s.mu.Lock()
 	fns := make([]func(protocol.Event), 0, len(s.subs))
 	for _, fn := range s.subs {
 		fns = append(fns, fn)
 	}
 	s.mu.Unlock()
-	ev := protocol.Event{Type: "job", Job: &job}
 	for _, fn := range fns {
 		fn(ev)
 	}

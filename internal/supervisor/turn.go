@@ -115,7 +115,12 @@ func (s *Service) applyPromptResult(jobID string, item queued, res agent.PromptR
 	}
 }
 
-func (s *Service) Followup(_ context.Context, req protocol.FollowupRequest) (protocol.Job, error) {
+func (s *Service) Followup(ctx context.Context, req protocol.FollowupRequest) (protocol.Job, error) {
+	finish, err := s.beginOperation(ctx)
+	if err != nil {
+		return protocol.Job{}, err
+	}
+	defer finish()
 	job, err := s.load(req.JobID)
 	if err != nil {
 		return protocol.Job{}, err
@@ -126,16 +131,21 @@ func (s *Service) Followup(_ context.Context, req protocol.FollowupRequest) (pro
 	if job.State == protocol.StatePlanReady {
 		return s.decorate(job), errPlanPending
 	}
-	if job.State == protocol.StateNeedsInput || job.State == protocol.StateBlocked {
+	if job.State == protocol.StateNeedsInput || job.State == protocol.StateBlocked || job.State == protocol.StateDisconnected || job.State == protocol.StateCompleted || job.State == protocol.StateFailed {
 		job.State = protocol.StateExecuting
 	}
 	s.touch(&job)
 	s.save(job)
-	s.enqueue(req.JobID, queued{kind: "followup", text: req.Prompt})
+	s.enqueue(req.JobID, queued{connect: true, kind: "followup", text: req.Prompt})
 	return s.snapshot(req.JobID), nil
 }
 
-func (s *Service) Continue(_ context.Context, jobID string) (protocol.Job, error) {
+func (s *Service) Continue(ctx context.Context, jobID string) (protocol.Job, error) {
+	finish, err := s.beginOperation(ctx)
+	if err != nil {
+		return protocol.Job{}, err
+	}
+	defer finish()
 	job, err := s.load(jobID)
 	if err != nil {
 		return protocol.Job{}, err
@@ -146,12 +156,12 @@ func (s *Service) Continue(_ context.Context, jobID string) (protocol.Job, error
 	if job.State == protocol.StatePlanReady {
 		return s.decorate(job), errPlanPending
 	}
-	if job.State == protocol.StateNeedsInput || job.State == protocol.StateBlocked {
+	if job.State == protocol.StateNeedsInput || job.State == protocol.StateBlocked || job.State == protocol.StateDisconnected || job.State == protocol.StateCompleted || job.State == protocol.StateFailed {
 		job.State = protocol.StateExecuting
 	}
 	s.touch(&job)
 	s.save(job)
-	s.enqueue(jobID, queued{kind: "continue", text: protocol.ContinuePrompt()})
+	s.enqueue(jobID, queued{connect: true, kind: "continue", text: protocol.ContinuePrompt()})
 	return s.snapshot(jobID), nil
 }
 

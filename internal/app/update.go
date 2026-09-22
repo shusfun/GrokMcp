@@ -14,7 +14,7 @@ func matchReleaseAsset(req updater.CheckRequest, assets []github.ReleaseAsset) i
 	orig := make([]int, 0, len(assets))
 	for i, a := range assets {
 		name := strings.ToLower(a.Name)
-		if strings.HasSuffix(name, ".dmg") {
+		if strings.HasSuffix(name, ".dmg") || (strings.EqualFold(req.Platform, "windows") && !strings.HasSuffix(name, ".zip")) {
 			continue
 		}
 		filtered = append(filtered, a)

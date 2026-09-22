@@ -67,6 +67,26 @@ func (f *Fake) EnsureLeader(context.Context) error {
 	return f.EnsureErr
 }
 
+func (f *Fake) ConnectionState() ConnectionState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return ConnectionState{LeaderRunning: f.acpOK, ACPOK: f.acpOK}
+}
+
+func (f *Fake) SessionLoaded(sessionID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.Sessions[sessionID]
+	return f.acpOK && ok
+}
+
+func (f *Fake) Release() error {
+	f.mu.Lock()
+	f.acpOK = false
+	f.mu.Unlock()
+	return nil
+}
+
 func (f *Fake) AttachMode() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -121,6 +141,11 @@ func (f *Fake) LoadSession(ctx context.Context, sessionID, cwd string) error {
 	f.Sessions[sessionID] = cwd
 	return nil
 }
+
+func (f *Fake) LoadConnectedSession(ctx context.Context, sessionID, cwd string) error {
+	return f.LoadSession(ctx, sessionID, cwd)
+}
+func (f *Fake) InvalidateSession(string) {}
 
 func (f *Fake) Prompt(ctx context.Context, sessionID, text string) (PromptResult, error) {
 	f.mu.Lock()

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"grokmcp/internal/silent"
 )
 
 func FindResumePID(sessionID string) int {
@@ -15,7 +17,9 @@ func FindResumePID(sessionID string) int {
 	if sessionID == "" {
 		return 0
 	}
-	out, err := exec.Command("wmic", "process", "where", "CommandLine like '%--resume "+sessionID+"%'", "get", "ProcessId").Output()
+	cmd := exec.Command("wmic", "process", "where", "CommandLine like '%--resume "+sessionID+"%'", "get", "ProcessId")
+	silent.Hide(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return 0
 	}
@@ -56,7 +60,9 @@ func terminatePID(pid int, wait time.Duration) error {
 		return nil
 	}
 	kill := func() error {
-		return exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T").Run()
+		cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T")
+		silent.Hide(cmd)
+		return cmd.Run()
 	}
 	_ = kill()
 	deadline := time.Now().Add(wait)
@@ -66,7 +72,9 @@ func terminatePID(pid int, wait time.Duration) error {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
+	cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+	silent.Hide(cmd)
+	return cmd.Run()
 }
 
 func waitResumeOrCmd(sessionID string, cmd *exec.Cmd) {

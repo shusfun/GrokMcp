@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"grokmcp/internal/silent"
 )
 
 const (
@@ -69,6 +71,7 @@ func (in Installer) run(ctx context.Context, dir, name string, args []string, ex
 		cmd.Dir = dir
 	}
 	cmd.Env = mergeEnv(os.Environ(), extraEnv)
+	silent.Hide(cmd)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

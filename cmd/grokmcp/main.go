@@ -11,6 +11,7 @@ import (
 	mcpserver "grokmcp/internal/mcp"
 	"grokmcp/internal/protocol"
 	appruntime "grokmcp/internal/runtime"
+	"grokmcp/internal/terminal"
 )
 
 func main() {
@@ -20,6 +21,11 @@ func main() {
 	}
 	ctx := context.Background()
 	switch cmd {
+	case "terminal-view":
+		if err := terminal.RunViewer(ctx, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "mcp":
 		backend, cleanup, err := appruntime.Connect(ctx, appruntime.ConnectOptions{})
 		if err != nil {
@@ -49,9 +55,7 @@ func main() {
 		finder := grokbin.New()
 		d := finder.Diagnose(ctx, "")
 		g := agent.NewGrok(d.GrokPath, finder)
-		if err := g.EnsureLeader(ctx); err == nil {
-			d = g.Diagnose(ctx)
-		}
+		// doctor 只执行显式诊断，不启动 leader 或恢复任务。
 		_ = g.Close()
 		printDiagnose(d)
 		if d.Error != "" {

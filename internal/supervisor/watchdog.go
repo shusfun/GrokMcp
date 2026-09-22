@@ -22,6 +22,7 @@ func (s *Service) watchLoop() {
 				return
 			}
 			s.inspectWatchdog(s.clock.Now())
+			s.releaseIfIdle(s.clock.Now())
 		}
 	}
 }

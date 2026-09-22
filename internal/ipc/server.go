@@ -69,27 +69,17 @@ func (s *Server) handle(c net.Conn) {
 		if err := json.Unmarshal(sc.Bytes(), &req); err != nil {
 			continue
 		}
-		if req.Method == "wait" || req.Method == "debugWait" {
-			go func(req Request) {
-				res, err := s.dispatch(ctx, req)
-				out := Response{ID: req.ID}
-				if err != nil {
-					out.Error = err.Error()
-				} else {
-					out.Result = res
-				}
-				write(out)
-			}(req)
-			continue
-		}
-		res, err := s.dispatch(ctx, req)
-		out := Response{ID: req.ID}
-		if err != nil {
-			out.Error = err.Error()
-		} else {
-			out.Result = res
-		}
-		write(out)
+		// 响应按 ID 匹配，握手/诊断不能阻塞同连接的状态与取消请求。
+		go func(req Request) {
+			res, err := s.dispatch(ctx, req)
+			out := Response{ID: req.ID}
+			if err != nil {
+				out.Error = err.Error()
+			} else {
+				out.Result = res
+			}
+			write(out)
+		}(req)
 	}
 }
 

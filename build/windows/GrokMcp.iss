@@ -1,4 +1,9 @@
-#define AppName "Grok Supervisor"
+#ifndef AppName
+  #define AppName "Grok Supervisor"
+#endif
+#ifndef MyAppId
+  #define MyAppId "{{B4A9D8B1-8E9D-4A0D-9F9F-0D4E6B1C7A22}"
+#endif
 #define AppPublisher "GrokMcp"
 #define AppExeName "GrokMcp.exe"
 
@@ -13,14 +18,14 @@
 #endif
 
 [Setup]
-AppId={{B4A9D8B1-8E9D-4A0D-9F9F-0D4E6B1C7A22}
+AppId={#MyAppId}
 AppName={#AppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\Grok Supervisor
 DefaultGroupName={#AppName}
 UninstallDisplayName={#AppName}
-OutputBaseFilename=GrokMcp-{#MyAppVersion}-windows-amd64
+OutputBaseFilename=GrokMcp-{#MyAppVersion}-windows-amd64-installer
 OutputDir={#OutputDir}
 ArchitecturesInstallIn64BitMode=x64
 Compression=lzma2
@@ -28,6 +33,8 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 CloseApplications=yes
+UsePreviousAppDir=yes
+RestartApplications=no
 Uninstallable=yes
 
 [Files]
@@ -39,17 +46,3 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "启动 {#AppName}"; Flags: nowait postinstall skipifsilent
-
-[Code]
-function InitializeSetup(): Boolean;
-var
-  Uninstaller: String;
-  ResultCode: Integer;
-begin
-  Result := True;
-  Uninstaller := ExpandConstant('{uninstallexe}');
-  if FileExists(Uninstaller) then begin
-    if Exec(Uninstaller, '/SILENT', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
-      Result := False;
-  end;
-end;

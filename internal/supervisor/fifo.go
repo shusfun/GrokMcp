@@ -2,9 +2,11 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"grokmcp/internal/agent"
 	"grokmcp/internal/protocol"
 	"grokmcp/internal/trace"
 )
@@ -142,6 +144,7 @@ func (s *Service) pump(jobID string) {
 		s.emitTrace(job, "info", trace.SourceFIFO, "pump.started", item.kind, map[string]any{"kind": item.kind, "turn_id": item.turnID})
 
 		s.runItem(ctx, jobID, item)
+		cancel()
 
 		s.mu.Lock()
 		rt.busy = false
@@ -168,11 +171,15 @@ func (s *Service) maybeAttachDesired(jobID string) {
 	if closed {
 		return
 	}
+	rt := s.runtime(jobID)
+	s.mu.Lock()
+	requested := rt.viewRequested
+	s.mu.Unlock()
 	job, err := s.load(jobID)
-	if err != nil || job.DesiredViewMode != protocol.ViewHeaded {
+	if !requested || err != nil || job.DesiredViewMode != protocol.ViewHeaded {
 		return
 	}
-	if job.ViewMode == protocol.ViewHeaded || job.ViewMode == protocol.ViewDetaching {
+	if job.ViewMode != protocol.ViewAttaching {
 		return
 	}
 	if !s.attachAllowed(job) {
@@ -203,6 +210,16 @@ func (s *Service) runItem(ctx context.Context, jobID string, item queued) {
 	fields := trace.PromptFields(item.text, s.debugPayloads(jobID))
 	fields["kind"] = item.kind
 	s.emitTrace(job, "info", trace.SourceACP, "acp.prompt.started", item.kind, fields)
+	if item.kind != "plan" {
+		load := s.agent.LoadConnectedSession
+		if item.connect {
+			load = s.agent.LoadSession
+		}
+		if err := load(ctx, job.GrokSessionID, job.Cwd); err != nil {
+			s.disconnectWithError(jobID, err.Error())
+			return
+		}
+	}
 	res, err := s.agent.Prompt(ctx, job.GrokSessionID, item.text)
 	if item.gen != s.currentGen(jobID) {
 		s.emitTrace(job, "debug", trace.SourceFIFO, "pump.skipped", "stale generation", map[string]any{"reason": "stale_generation"})
@@ -233,6 +250,9 @@ func (s *Service) runItem(ctx context.Context, jobID string, item queued) {
 func isDisconnect(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, agent.ErrDisconnected) {
+		return true
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "eof") || strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection reset")

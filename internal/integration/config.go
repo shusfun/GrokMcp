@@ -79,6 +79,10 @@ func DeepLink(id, exe string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// CC Switch v3.20.3 src-tauri/src/deeplink/utils.rs:30 decode_base64_param
+	// 依次尝试 BASE64_STANDARD、BASE64_STANDARD_NO_PAD、BASE64_URL_SAFE、BASE64_URL_SAFE_NO_PAD（同文件 64-67 行）。
+	// parser.rs:250 parse_mcp_deeplink 读取 apps 与 config，name 固定为 None（parser.rs:295）。
+	// mcp.rs:68 用 decode_base64_param 解码后要求 JSON 含 mcpServers，服务器 ID 取该对象的键。
 	cfg := base64.RawURLEncoding.EncodeToString([]byte(raw))
 	u := &url.URL{
 		Scheme: "ccswitch",

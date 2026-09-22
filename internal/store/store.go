@@ -87,6 +87,9 @@ CREATE TABLE IF NOT EXISTS settings (
 		}
 	}
 	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS jobs_list_idx ON jobs(archived_at, updated_at, created_at, job_id)`)
+	if _, err := s.db.Exec(`UPDATE settings SET value='headless' WHERE key='default_view_mode' AND value<>'headless'`); err != nil {
+		return err
+	}
 	return s.migrateProjects()
 }
 
@@ -317,6 +320,7 @@ func (s *Store) Settings() (protocol.Settings, error) {
 }
 
 func (s *Store) SaveSettings(st protocol.Settings) error {
+	st.DefaultViewMode = string(protocol.ViewHeadless)
 	pairs := [][2]string{
 		{"grok_binary_path", st.GrokBinaryPath},
 		{"terminal_provider", st.TerminalProvider},

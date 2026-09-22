@@ -76,7 +76,7 @@ const STAGE: Record<JobState, string> = {
   executing: "实施中",
   completed: "已完成",
   needs_input: "需要输入",
-  disconnected: "已断连",
+  disconnected: "待手动恢复",
   recovering: "恢复中",
   cancelled: "已取消",
   blocked: "阻塞",

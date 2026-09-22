@@ -87,7 +87,7 @@ func openHost(ctx context.Context, opts Options, lock *os.File) (core.Backend, f
 	term := opts.Term
 	if term == nil {
 		stt, _ := st.Settings()
-		term = terminal.Exec{Template: stt.TerminalCommandTemplate, Provider: stt.TerminalProvider}
+		term = terminal.NewExec(stt.TerminalCommandTemplate, stt.TerminalProvider, ag)
 	}
 	svc := supervisor.New(st, ag, term, clock.Real{}, ids.UUID{})
 	if home, err := paths.AppDir(); err == nil {
@@ -109,7 +109,6 @@ func openHost(ctx context.Context, opts Options, lock *os.File) (core.Backend, f
 		}
 		return p
 	})
-	_ = ag.EnsureLeader(ctx)
 	if err := svc.Start(ctx); err != nil {
 		_ = ln.Close()
 		_ = st.Close()
