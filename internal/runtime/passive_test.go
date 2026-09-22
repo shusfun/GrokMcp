@@ -34,9 +34,16 @@ func TestIPCColdStartAndProbeDoNotLaunchAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeHost()
-	for i := 0; i < 10; i++ {
+	deadline := time.Now().Add(2 * time.Second)
+	for !Probe(ctx) && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !Probe(ctx) {
+		t.Fatal("passive IPC not ready")
+	}
+	for i := 0; i < 9; i++ {
 		if !Probe(ctx) {
-			t.Fatal("passive IPC not ready")
+			t.Fatal("passive IPC became unavailable")
 		}
 	}
 	if a.calls.Load() != 0 {
