@@ -62,7 +62,7 @@ func (s *Service) checkJobStall(job protocol.Job, now time.Time) {
 	switch {
 	case qlen > 0 && !busy && job.InputOwner == protocol.OwnerSupervisor && job.State != protocol.StatePlanReady && job.PauseReason == "" && job.ApprovalDelivery != "unknown":
 		reason, need = "queue_nonempty_but_pump_idle", 5*time.Second
-	case qlen > 0 && job.InputOwner == protocol.OwnerTUI && !live:
+	case qlen > 0 && (job.InputOwner == protocol.OwnerTUI || job.InputOwner == protocol.OwnerHandoff) && !live && job.ViewMode != protocol.ViewAttaching:
 		reason, need = "stale_tui_owner", 3*time.Second
 	case job.ViewMode == protocol.ViewDetaching:
 		reason, need = "detach_timeout", 3*time.Second

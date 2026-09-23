@@ -51,6 +51,7 @@ type InputOwner string
 const (
 	OwnerSupervisor InputOwner = "supervisor"
 	OwnerTUI        InputOwner = "tui"
+	OwnerHandoff    InputOwner = "handoff"
 )
 
 type TaskMarker string

@@ -122,6 +122,37 @@ func viewJob(ctx context.Context, sessionID string) string {
 	return sessionID
 }
 
+func (e Exec) WorkerPID(sessionID string) int {
+	if e.managed == nil {
+		return 0
+	}
+	e.managed.mu.Lock()
+	w := e.managed.workers[sessionID]
+	e.managed.mu.Unlock()
+	if w == nil {
+		return 0
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.process == nil {
+		return 0
+	}
+	return w.process.PID
+}
+
+func (e Exec) SessionOutput(sessionID string) []byte {
+	if e.managed == nil {
+		return nil
+	}
+	e.managed.mu.Lock()
+	w := e.managed.workers[sessionID]
+	e.managed.mu.Unlock()
+	if w == nil || w.console == nil {
+		return nil
+	}
+	return w.console.Output()
+}
+
 func (e Exec) WorkerGeneration(sid string) string {
 	if e.managed == nil {
 		return ""

@@ -17,32 +17,46 @@ func (s *Service) SetView(ctx context.Context, req protocol.SetViewRequest) (pro
 		return protocol.Job{}, err
 	}
 	defer finish()
+	rt := s.runtime(req.JobID)
+	rt.coord.Lock()
 	job, err := s.load(req.JobID)
 	if err != nil {
+		rt.coord.Unlock()
 		return protocol.Job{}, err
 	}
 	switch req.View {
 	case protocol.ViewHeaded:
-		rt := s.runtime(job.JobID)
 		s.mu.Lock()
 		rt.viewRequested = true
+		rt.viewEpoch++
+		epoch := rt.viewEpoch
 		s.mu.Unlock()
 		job.DesiredViewMode = protocol.ViewHeaded
+		if job.InputOwner == protocol.OwnerSupervisor {
+			job.InputOwner = protocol.OwnerHandoff
+		}
+		if job.ViewMode == protocol.ViewHeadless {
+			job.ViewMode = protocol.ViewAttaching
+		}
 		s.touch(&job)
-		s.saveView(job)
+		s.saveViewLocked(job)
+		rt.coord.Unlock()
 		s.emitTrace(job, "info", trace.SourceSupervisor, "view.attach.requested", "headed requested", nil)
-		return s.attach(ctx, job)
+		return s.attach(ctx, job, epoch)
 	case protocol.ViewHeadless:
-		rt := s.runtime(job.JobID)
 		s.mu.Lock()
 		rt.viewRequested = false
+		rt.viewEpoch++
+		epoch := rt.viewEpoch
 		s.mu.Unlock()
 		job.DesiredViewMode = protocol.ViewHeadless
 		s.touch(&job)
-		s.saveView(job)
+		s.saveViewLocked(job)
+		rt.coord.Unlock()
 		s.emitTrace(job, "info", trace.SourceSupervisor, "view.detach.requested", "headless requested", nil)
-		return s.detach(ctx, job, false)
+		return s.detachExpected(ctx, job, false, epoch)
 	default:
+		rt.coord.Unlock()
 		return protocol.Job{}, errors.New("view must be headed or headless")
 	}
 }
@@ -56,17 +70,28 @@ func (s *Service) OpenTerminal(ctx context.Context, req protocol.OpenTerminalReq
 	if req.Dashboard {
 		return s.term.OpenDashboard(ctx, s.grokPath(), "")
 	}
+	rt := s.runtime(req.JobID)
+	rt.coord.Lock()
 	job, err := s.load(req.JobID)
 	if err != nil {
+		rt.coord.Unlock()
 		return err
 	}
-	rt := s.runtime(job.JobID)
 	s.mu.Lock()
 	rt.viewRequested = true
+	rt.viewEpoch++
+	epoch := rt.viewEpoch
 	s.mu.Unlock()
 	job.DesiredViewMode = protocol.ViewHeaded
-	s.saveView(job)
-	_, err = s.attach(ctx, job)
+	if job.InputOwner == protocol.OwnerSupervisor {
+		job.InputOwner = protocol.OwnerHandoff
+	}
+	if job.ViewMode == protocol.ViewHeadless {
+		job.ViewMode = protocol.ViewAttaching
+	}
+	s.saveViewLocked(job)
+	rt.coord.Unlock()
+	_, err = s.attach(ctx, job, epoch)
 	return err
 }
 
@@ -86,87 +111,14 @@ func (s *Service) DetachView(ctx context.Context, jobID string) (protocol.Job, e
 	return s.detach(ctx, job, false)
 }
 
-func (s *Service) attach(ctx context.Context, job protocol.Job) (protocol.Job, error) {
+func (s *Service) attach(ctx context.Context, job protocol.Job, epoch uint64) (protocol.Job, error) {
 	if job.GrokSessionID == "" {
-		return protocol.Job{}, errors.New("job has no grok session")
+		return s.failHeadless(job, epoch, errors.New("job has no grok session"))
 	}
-	if job.ViewMode == protocol.ViewAttaching {
-		rt := s.runtime(job.JobID)
-		s.mu.Lock()
-		h := rt.term
-		s.mu.Unlock()
-		pending := false
-		if p, ok := h.(interface{ Pending() bool }); ok {
-			pending = p.Pending()
-		}
-		if h != nil && (pending || s.handleAlive(h)) {
-			s.focusHandle(ctx, job.GrokSessionID, h)
-			return s.snapshot(job.JobID), nil
-		}
-	}
-	if job.ViewMode == protocol.ViewHeaded || job.InputOwner == protocol.OwnerTUI {
-		return s.launchTUI(ctx, job)
-	}
-	if !s.attachAllowed(job) {
-		job.ViewMode = protocol.ViewAttaching
-		s.touch(&job)
-		s.saveView(job)
-		rt := s.runtime(job.JobID)
-		s.mu.Lock()
-		rt.attachGen++
-		gen := rt.attachGen
-		s.mu.Unlock()
-		if launcher, ok := s.term.(interface {
-			OpenPending(context.Context, string, string, string) (terminal.Handle, error)
-		}); ok {
-			h, err := launcher.OpenPending(terminal.WithJob(ctx, job.JobID), s.grokPath(), job.GrokSessionID, job.Cwd)
-			if err != nil {
-				return s.failHeadless(job, err)
-			}
-			waitCtx, cancel := context.WithCancel(context.Background())
-			s.mu.Lock()
-			rt.term = h
-			rt.waitCancel = cancel
-			s.mu.Unlock()
-			s.goWatch(func() { s.watchTUI(job, h, waitCtx, gen) })
-		}
-		s.goWatch(func() { s.attachWhenIdle(job.JobID, gen) })
-		return s.snapshot(job.JobID), nil
-	}
-	return s.launchTUI(ctx, job)
+	return s.launchTUI(ctx, job, epoch)
 }
 
-func (s *Service) attachWhenIdle(jobID string, gen uint64) {
-	for {
-		s.mu.Lock()
-		closed := s.closed
-		s.mu.Unlock()
-		if closed {
-			return
-		}
-		rt := s.runtime(jobID)
-		s.mu.Lock()
-		cur := rt.attachGen
-		s.mu.Unlock()
-		if cur != gen {
-			return
-		}
-		job, err := s.load(jobID)
-		if err != nil || job.DesiredViewMode != protocol.ViewHeaded {
-			return
-		}
-		if job.ViewMode != protocol.ViewAttaching {
-			return
-		}
-		if s.attachAllowed(job) {
-			_, _ = s.launchTUI(context.Background(), job)
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (out protocol.Job, err error) {
+func (s *Service) launchTUI(ctx context.Context, job protocol.Job, epoch uint64) (out protocol.Job, err error) {
 	ctx = terminal.WithJob(ctx, job.JobID)
 	finish, err := s.beginOperation(ctx)
 	if err != nil {
@@ -181,6 +133,10 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (out protocol
 	s.mu.Unlock()
 	rt := s.runtime(job.JobID)
 	s.mu.Lock()
+	if !rt.viewRequested || rt.viewEpoch != epoch {
+		s.mu.Unlock()
+		return s.snapshot(job.JobID), nil
+	}
 	if rt.attaching {
 		done := rt.attachDone
 		s.mu.Unlock()
@@ -189,10 +145,7 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (out protocol
 			return s.snapshot(job.JobID), ctx.Err()
 		case <-done:
 		}
-		s.mu.Lock()
-		attachErr := rt.attachErr
-		s.mu.Unlock()
-		return s.snapshot(job.JobID), attachErr
+		return s.launchTUI(ctx, s.snapshot(job.JobID), epoch)
 	}
 	rt.attaching = true
 	rt.attachDone = make(chan struct{})
@@ -209,26 +162,6 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (out protocol
 		}
 		s.mu.Unlock()
 	}()
-	if existing != nil && job.ViewMode == protocol.ViewAttaching {
-		if p, ok := existing.(interface{ Pending() bool }); ok && p.Pending() {
-			if err := s.waitHeadedReady(ctx, existing); err != nil {
-				_ = existing.Close()
-				return s.failHeadless(job, err)
-			}
-		}
-		if !s.handleAlive(existing) {
-			return s.failHeadless(job, errors.New("查看窗口已关闭"))
-		}
-		if a, ok := s.term.(interface {
-			ActivateSession(context.Context, string, string, string) error
-		}); ok {
-			s.agent.InvalidateSession(job.GrokSessionID)
-			if err := a.ActivateSession(ctx, s.grokPath(), job.GrokSessionID, job.Cwd); err != nil {
-				_ = existing.Close()
-				return s.failHeadless(job, err)
-			}
-		}
-	}
 	if existing != nil && s.handleAlive(existing) {
 		s.focusHandle(ctx, job.GrokSessionID, existing)
 		s.emitTerm(job, "info", "terminal.focused", "existing TUI focused", existing, true, "ok", "")
@@ -237,7 +170,7 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (out protocol
 			s.emitTerm(job, "error", "terminal.focused", err.Error(), existing, true, "error", err.Error())
 			return s.decorate(job), err
 		}
-		return s.markHeaded(job), nil
+		return s.markHeaded(job, epoch), nil
 	}
 	if existing != nil {
 		s.mu.Lock()
@@ -251,57 +184,203 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job) (out protocol
 		if err := s.waitHeadedReady(ctx, h); err != nil {
 			_ = h.Close()
 			s.emitTerm(job, "error", "terminal.reused", err.Error(), h, true, "error", err.Error())
-			return s.failHeadless(job, err)
+			return s.failHeadless(job, epoch, err)
 		}
 		s.emitTerm(job, "info", "terminal.reused", "adopted existing TUI", h, true, "ok", "")
 		s.emitTerm(job, "info", "terminal.focused", "existing TUI focused", h, true, "ok", "")
-		return s.commitHeaded(job, h)
+		return s.commitHeaded(job, h, epoch)
+	}
+	if err := s.yieldInFlightTurn(job); err != nil {
+		s.emitTerm(job, "error", "terminal.opened", err.Error(), nil, false, "error", err.Error())
+		return s.failHeadless(job, epoch, err)
 	}
 	job.ViewMode = protocol.ViewAttaching
+	job.InputOwner = protocol.OwnerHandoff
 	s.touch(&job)
-	s.saveView(job)
+	if !s.saveRequestedView(job, epoch) {
+		return s.snapshot(job.JobID), nil
+	}
 	s.emitTerm(job, "info", "terminal.opened", "opening TUI", nil, false, "", "")
 	s.agent.InvalidateSession(job.GrokSessionID)
 	h, err := s.term.OpenResume(ctx, s.grokPath(), job.GrokSessionID, job.Cwd)
 	if err != nil {
 		s.emitTerm(job, "error", "terminal.opened", err.Error(), nil, false, "error", err.Error())
-		return s.failHeadless(job, err)
+		return s.failHeadless(job, epoch, err)
+	}
+	if generation, ok := s.term.(interface{ WorkerGeneration(string) string }); ok {
+		s.mu.Lock()
+		rt.workerGeneration = generation.WorkerGeneration(job.GrokSessionID)
+		s.mu.Unlock()
 	}
 	if err := s.waitHeadedReady(ctx, h); err != nil {
 		_ = h.Close()
 		s.emitTerm(job, "error", "terminal.opened", err.Error(), h, false, "error", err.Error())
 		s.emitTerm(job, "info", "terminal.closed", "verify failed", h, false, "error", err.Error())
-		return s.failHeadless(job, err)
+		return s.failHeadless(job, epoch, err)
+	}
+	s.mu.Lock()
+	requested := rt.viewRequested && rt.viewEpoch == epoch
+	newerRequest := rt.viewRequested && rt.viewEpoch != epoch
+	s.mu.Unlock()
+	if !requested {
+		if !newerRequest {
+			_ = h.Close()
+			s.reconcileClosedLaunch(job.JobID, job.GrokSessionID)
+		}
+		return s.snapshot(job.JobID), nil
 	}
 	s.emitTerm(job, "info", "terminal.opened", "TUI opened", h, false, "ok", "")
-	return s.commitHeaded(job, h)
+	return s.commitHeaded(job, h, epoch)
 }
 
-func (s *Service) failHeadless(job protocol.Job, err error) (protocol.Job, error) {
+func approvalHoldsTurn(job protocol.Job) bool {
+	return job.State == protocol.StatePlanReady || job.PauseReason == "approval" || job.PauseReason == "plan_content_missing"
+}
+
+// 打开 TUI 前让出仍在等待审批的 ACP turn。只取消这一次调用，不把 TUI 文本写成原请求结果。
+func (s *Service) yieldInFlightTurn(job protocol.Job) error {
+	rt := s.runtime(job.JobID)
+	if !approvalHoldsTurn(job) {
+		return nil
+	}
+	rt.coord.Lock()
+	s.mu.Lock()
+	busy := rt.busy
+	cancelTurn := rt.cancel
+	if busy {
+		rt.cancelledTurn = true
+		rt.gen++
+		if cancelTurn != nil {
+			cancelTurn()
+		}
+	}
+	s.mu.Unlock()
+	rt.coord.Unlock()
+	if !busy {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	cancelErr := s.agent.Cancel(ctx, job.GrokSessionID)
+	cancel()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		busy = rt.busy
+		s.mu.Unlock()
+		if !busy {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if busy {
+		return errors.New("交互交接未能等来 ACP turn 退出")
+	}
+	if err := s.markYieldedRequest(job.JobID); err != nil {
+		return err
+	}
+	return cancelErr
+}
+
+func (s *Service) markYieldedRequest(jobID string) error {
+	rt := s.runtime(jobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
+	current, err := s.load(jobID)
+	if err != nil {
+		return err
+	}
+	rec, err := s.record(jobID)
+	if err != nil {
+		return err
+	}
+	if current.State == protocol.StatePlanReady || current.ApprovalDelivery == "pending" {
+		current.ApprovalDelivery = "expired"
+	}
+	switch current.State {
+	case protocol.StatePlanReady, protocol.StateExecuting, protocol.StatePlanning, protocol.StateStarting:
+		current.State = protocol.StateNeedsInput
+	}
+	current.PauseReason = "execution_unknown"
+	current.ActiveTurnID = ""
+	current.LastAction = "交互交接已让出未完成的 ACP turn"
+	current.LastSummary = "原 ACP 请求结果未知，TUI 输入不会写成该请求的回答"
+	s.touch(&current)
+	rec.Job = current
+	rec.Result = nil
+	if rec.RequestPhase == "" || rec.RequestPhase == "queued" || rec.RequestPhase == "preparing" || rec.RequestPhase == "sent" {
+		rec.RequestPhase = "unknown"
+	}
+	if err := s.store.PutJob(rec); err != nil {
+		s.persistenceFailed(jobID, err)
+		return err
+	}
+	s.emit(current)
+	return nil
+}
+
+func (s *Service) reconcileClosedLaunch(jobID, sessionID string) {
+	rt := s.runtime(jobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
+	s.mu.Lock()
+	requested := rt.viewRequested
+	s.mu.Unlock()
+	if requested {
+		return
+	}
+	job, err := s.load(jobID)
+	if err != nil {
+		return
+	}
+	job.ViewMode = protocol.ViewHeadless
+	job.DesiredViewMode = protocol.ViewHeadless
+	job.InputOwner = protocol.OwnerSupervisor
+	if t, ok := s.term.(interface{ WorkerAlive(string) bool }); ok && t.WorkerAlive(sessionID) {
+		job.InputOwner = protocol.OwnerTUI
+	}
+	s.saveViewLocked(job)
+}
+
+func (s *Service) failHeadless(job protocol.Job, epoch uint64, err error) (protocol.Job, error) {
 	job.ViewMode = protocol.ViewHeadless
 	job.InputOwner = protocol.OwnerSupervisor
+	if t, ok := s.term.(interface{ WorkerAlive(string) bool }); ok && t.WorkerAlive(job.GrokSessionID) {
+		job.InputOwner = protocol.OwnerTUI
+		if generation, ok := s.term.(interface{ WorkerGeneration(string) string }); ok {
+			rt := s.runtime(job.JobID)
+			s.mu.Lock()
+			rt.workerGeneration = generation.WorkerGeneration(job.GrokSessionID)
+			s.mu.Unlock()
+		}
+	}
 	job.LastSummary = err.Error()
 	job.DesiredViewMode = protocol.ViewHeadless
-	rt := s.runtime(job.JobID)
-	s.mu.Lock()
-	rt.viewRequested = false
-	s.mu.Unlock()
 	s.touch(&job)
-	s.saveView(job)
+	rt := s.runtime(job.JobID)
+	rt.coord.Lock()
+	s.mu.Lock()
+	current := rt.viewRequested && rt.viewEpoch == epoch
+	if current {
+		rt.viewRequested = false
+		rt.viewEpoch++
+	}
+	s.mu.Unlock()
+	if current {
+		s.saveViewLocked(job)
+	}
+	rt.coord.Unlock()
 	return s.decorate(job), err
 }
 
-func (s *Service) commitHeaded(job protocol.Job, h terminal.Handle) (protocol.Job, error) {
+func (s *Service) commitHeaded(job protocol.Job, h terminal.Handle, epoch uint64) (protocol.Job, error) {
+	rt := s.runtime(job.JobID)
+	rt.coord.Lock()
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || !rt.viewRequested || rt.viewEpoch != epoch {
 		s.mu.Unlock()
+		rt.coord.Unlock()
 		_ = h.Close()
-		return s.decorate(job), errors.New("supervisor closed")
-	}
-	rt := s.rt[job.JobID]
-	if rt == nil {
-		rt = &runtime{stallSince: map[string]time.Time{}}
-		s.rt[job.JobID] = rt
+		return s.snapshot(job.JobID), nil
 	}
 	prev := rt.term
 	prevCancel := rt.waitCancel
@@ -317,7 +396,8 @@ func (s *Service) commitHeaded(job protocol.Job, h terminal.Handle) (protocol.Jo
 	if prev != nil && prev != h {
 		_ = prev.Close()
 	}
-	job = s.markHeaded(job)
+	job = s.markHeadedLocked(job)
+	rt.coord.Unlock()
 	s.goWatch(func() { s.watchTUI(job, h, waitCtx, gen) })
 	return s.snapshot(job.JobID), nil
 }
@@ -365,7 +445,7 @@ func (s *Service) waitHeadedReady(ctx context.Context, h terminal.Handle) error 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	timeout := 5 * time.Second
+	timeout := 20 * time.Second
 	if _, ok := s.term.(*terminal.Fake); ok {
 		timeout = 300 * time.Millisecond
 	}
@@ -380,13 +460,17 @@ func (s *Service) waitHeadedReady(ctx context.Context, h terminal.Handle) error 
 		pid := h.PID()
 		wid := h.WindowID()
 		tty := h.TTY()
-		if pid > 0 && (!needWin || wid != "") && (!needTTY || tty != "") {
+		workerReady := true
+		if ready, ok := h.(interface{ WorkerReady() bool }); ok {
+			workerReady = ready.WorkerReady()
+		}
+		if workerReady && pid > 0 && (!needWin || wid != "") && (!needTTY || tty != "") {
 			if s.focusable(ctx, h) {
 				return nil
 			}
 			last = "window not focusable"
 		} else {
-			last = "missing pid, window, or tty"
+			last = "TUI worker or viewer not ready"
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -433,7 +517,17 @@ func (s *Service) termProvider() string {
 	return "default"
 }
 
-func (s *Service) markHeaded(job protocol.Job) protocol.Job {
+func (s *Service) markHeaded(job protocol.Job, epoch uint64) protocol.Job {
+	rt := s.runtime(job.JobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
+	if !s.viewRequestCurrent(job.JobID, epoch) {
+		return s.snapshot(job.JobID)
+	}
+	return s.markHeadedLocked(job)
+}
+
+func (s *Service) markHeadedLocked(job protocol.Job) protocol.Job {
 	if t, ok := s.term.(interface{ WorkerGeneration(string) string }); ok {
 		generation := t.WorkerGeneration(job.GrokSessionID)
 		rt := s.runtime(job.JobID)
@@ -444,9 +538,27 @@ func (s *Service) markHeaded(job protocol.Job) protocol.Job {
 	job.ViewMode = protocol.ViewHeaded
 	job.InputOwner = protocol.OwnerTUI
 	s.touch(&job)
-	s.saveView(job)
+	s.saveViewLocked(job)
 	s.emitTrace(job, "info", trace.SourceSupervisor, "view.attached", "TUI attached", nil)
 	return s.snapshot(job.JobID)
+}
+
+func (s *Service) viewRequestCurrent(jobID string, epoch uint64) bool {
+	rt := s.runtime(jobID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return rt.viewRequested && rt.viewEpoch == epoch
+}
+
+func (s *Service) saveRequestedView(job protocol.Job, epoch uint64) bool {
+	rt := s.runtime(job.JobID)
+	rt.coord.Lock()
+	defer rt.coord.Unlock()
+	if !s.viewRequestCurrent(job.JobID, epoch) {
+		return false
+	}
+	s.saveViewLocked(job)
+	return true
 }
 
 func (s *Service) focusHandle(ctx context.Context, sessionID string, h terminal.Handle) {
@@ -462,22 +574,39 @@ func (s *Service) focusHandle(ctx context.Context, sessionID string, h terminal.
 }
 
 func (s *Service) detach(_ context.Context, job protocol.Job, fromClose bool) (protocol.Job, error) {
+	return s.detachExpected(context.Background(), job, fromClose, 0)
+}
+
+func (s *Service) detachExpected(_ context.Context, job protocol.Job, fromClose bool, epoch uint64) (protocol.Job, error) {
 	r := s.runtime(job.JobID)
+	r.coord.Lock()
 	s.mu.Lock()
+	if epoch != 0 && r.viewEpoch != epoch {
+		s.mu.Unlock()
+		r.coord.Unlock()
+		return s.snapshot(job.JobID), nil
+	}
 	r.viewRequested = false
+	r.viewEpoch++
 	s.mu.Unlock()
+	job, err := s.load(job.JobID)
+	if err != nil {
+		r.coord.Unlock()
+		return protocol.Job{}, err
+	}
 	if !fromClose && job.ViewMode == protocol.ViewHeadless && job.InputOwner == protocol.OwnerSupervisor {
 		if job.DesiredViewMode != protocol.ViewHeadless {
 			job.DesiredViewMode = protocol.ViewHeadless
 			s.touch(&job)
-			s.saveView(job)
+			s.saveViewLocked(job)
 		}
+		r.coord.Unlock()
 		return s.decorate(job), nil
 	}
 	job.DesiredViewMode = protocol.ViewHeadless
 	job.ViewMode = protocol.ViewDetaching
 	s.touch(&job)
-	s.saveView(job)
+	s.saveViewLocked(job)
 	rt := s.runtime(job.JobID)
 	s.mu.Lock()
 	h := rt.term
@@ -491,6 +620,7 @@ func (s *Service) detach(_ context.Context, job protocol.Job, fromClose bool) (p
 	}
 	gen := rt.attachGen
 	s.mu.Unlock()
+	r.coord.Unlock()
 	s.goWatch(func() { s.finishDetach(job.JobID, h, gen) })
 	return s.snapshot(job.JobID), nil
 }
@@ -500,16 +630,19 @@ func (s *Service) finishDetach(jobID string, h terminal.Handle, gen uint64) {
 		_ = h.Close()
 		s.emitTerm(protocol.Job{JobID: jobID}, "info", "terminal.closed", "close requested", h, false, "ok", "")
 	}
+	rt := s.runtime(jobID)
+	rt.coord.Lock()
 	s.mu.Lock()
-	rt := s.rt[jobID]
-	if rt == nil || rt.attachGen != gen {
-		s.mu.Unlock()
+	current := rt.attachGen == gen && !rt.viewRequested
+	s.mu.Unlock()
+	if !current {
+		rt.coord.Unlock()
 		s.emitTrace(protocol.Job{JobID: jobID}, "debug", trace.SourceSupervisor, "pump.skipped", "stale detach", map[string]any{"reason": "stale_generation"})
 		return
 	}
-	s.mu.Unlock()
 	job, err := s.load(jobID)
 	if err != nil {
+		rt.coord.Unlock()
 		return
 	}
 	if t, ok := s.term.(interface{ WorkerAlive(string) bool }); ok && t.WorkerAlive(job.GrokSessionID) {
@@ -517,9 +650,11 @@ func (s *Service) finishDetach(jobID string, h terminal.Handle, gen uint64) {
 		job.InputOwner = protocol.OwnerTUI
 		job.LastAction = "查看窗口已关闭，交互会话继续在后台运行"
 		s.touch(&job)
-		s.saveView(job)
+		s.saveViewLocked(job)
+		rt.coord.Unlock()
 		return
 	}
+	rt.coord.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	s.emitTrace(job, "info", trace.SourceACP, "session.load.started", "reclaim session", nil)
@@ -549,16 +684,24 @@ func (s *Service) finishDetach(jobID string, h terminal.Handle, gen uint64) {
 	if err != nil {
 		return
 	}
+	rt.coord.Lock()
 	s.mu.Lock()
-	if rt := s.rt[jobID]; rt == nil || rt.attachGen != gen {
-		s.mu.Unlock()
+	current = rt.attachGen == gen && !rt.viewRequested
+	s.mu.Unlock()
+	if !current {
+		rt.coord.Unlock()
 		return
 	}
-	s.mu.Unlock()
+	job, err = s.load(jobID)
+	if err != nil {
+		rt.coord.Unlock()
+		return
+	}
 	job.ViewMode = protocol.ViewHeadless
 	job.InputOwner = protocol.OwnerSupervisor
 	s.touch(&job)
-	s.saveView(job)
+	s.saveViewLocked(job)
+	rt.coord.Unlock()
 	s.emitTrace(job, "info", trace.SourceSupervisor, "view.detached", "input returned to supervisor", nil)
 	s.kick(job.JobID)
 }
@@ -571,7 +714,7 @@ func (s *Service) terminalWorkerExited(sessionID, generation string) {
 			return
 		}
 		for _, rec := range jobs {
-			if rec.Job.GrokSessionID != sessionID || rec.Job.InputOwner != protocol.OwnerTUI {
+			if rec.Job.GrokSessionID != sessionID || (rec.Job.InputOwner != protocol.OwnerTUI && rec.Job.InputOwner != protocol.OwnerHandoff) {
 				continue
 			}
 			rt := s.runtime(rec.Job.JobID)

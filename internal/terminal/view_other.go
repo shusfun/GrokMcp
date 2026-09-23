@@ -7,7 +7,7 @@ import (
 	"errors"
 )
 
-func (e Exec) openViewer(context.Context, string, string, string, bool) (Handle, error) {
+func (e Exec) openViewer(context.Context, string, string, string) (Handle, error) {
 	return nil, errors.New("Windows viewer unavailable")
 }
 func (e Exec) testViewerTemplate(context.Context, string) error {

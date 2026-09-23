@@ -14,6 +14,7 @@ import (
 var (
 	errPlanPending = errors.New("plan pending decision")
 	errJobInactive = errors.New("job is no longer active")
+	errTUIControl  = errors.New("交互会话正由 TUI 控制；请在终端输入，待交互进程退出后再发送 Codex 请求")
 )
 
 func acceptsTurnControl(job protocol.Job) bool {
@@ -91,7 +92,7 @@ func (s *Service) applyPromptResult(jobID string, item queued, res agent.PromptR
 		return
 	}
 	s.emit(job)
-	if marked && ts.State == protocol.MarkerWorking && job.InputOwner != protocol.OwnerTUI {
+	if marked && ts.State == protocol.MarkerWorking && job.InputOwner == protocol.OwnerSupervisor {
 		if err := s.enqueue(jobID, queued{kind: "continue", text: protocol.ContinuePrompt(), requestID: item.requestID}); err != nil {
 			s.persistenceFailed(jobID, err)
 		}
@@ -116,6 +117,9 @@ func (s *Service) Followup(ctx context.Context, req protocol.FollowupRequest) (p
 	}
 	if job.State == protocol.StateCancelled {
 		return s.decorate(job), errJobInactive
+	}
+	if job.InputOwner != protocol.OwnerSupervisor {
+		return s.decorate(job), errTUIControl
 	}
 	if job.State == protocol.StatePlanReady && job.PauseReason != "approval_expired" {
 		return s.decorate(job), errPlanPending
@@ -172,6 +176,9 @@ func (s *Service) Continue(ctx context.Context, jobID string) (protocol.Job, err
 	}
 	if !acceptsTurnControl(job) {
 		return protocol.Job{}, errJobInactive
+	}
+	if job.InputOwner != protocol.OwnerSupervisor {
+		return s.decorate(job), errTUIControl
 	}
 	if job.State == protocol.StatePlanReady && job.PauseReason != "approval_expired" {
 		return s.decorate(job), errPlanPending

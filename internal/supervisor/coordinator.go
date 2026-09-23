@@ -22,6 +22,10 @@ func (s *Service) saveView(view protocol.Job) {
 	rt := s.runtime(view.JobID)
 	rt.coord.Lock()
 	defer rt.coord.Unlock()
+	s.saveViewLocked(view)
+}
+
+func (s *Service) saveViewLocked(view protocol.Job) {
 	job, err := s.load(view.JobID)
 	if err != nil {
 		return

@@ -116,26 +116,13 @@ func (s *Service) isIdle(jobID string) bool {
 	if err != nil {
 		return false
 	}
-	if job.InputOwner == protocol.OwnerTUI || job.ViewMode == protocol.ViewDetaching {
+	if job.InputOwner != protocol.OwnerSupervisor || job.ViewMode == protocol.ViewDetaching {
 		return false
 	}
 	rt := s.runtime(jobID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return !rt.busy && len(rt.queue) == 0
-}
-
-func (s *Service) attachAllowed(job protocol.Job) bool {
-	if job.GrokSessionID == "" {
-		return false
-	}
-	if job.InputOwner == protocol.OwnerTUI || job.ViewMode == protocol.ViewDetaching {
-		return false
-	}
-	if job.State == protocol.StatePlanReady {
-		return true
-	}
-	return s.isIdle(job.JobID)
 }
 
 func (s *Service) pump(jobID string) {
@@ -166,7 +153,7 @@ func (s *Service) pump(jobID string) {
 			s.skipPump(job, "detaching", qlen)
 			return
 		}
-		if err == nil && job.InputOwner == protocol.OwnerTUI && qlen > 0 {
+		if err == nil && job.InputOwner != protocol.OwnerSupervisor && qlen > 0 {
 			reason := "tui_owns"
 			if !s.liveGrok(jobID) {
 				reason = "stale_tui_owner"
@@ -265,6 +252,7 @@ func (s *Service) maybeAttachDesired(jobID string) {
 	rt := s.runtime(jobID)
 	s.mu.Lock()
 	requested := rt.viewRequested
+	epoch := rt.viewEpoch
 	s.mu.Unlock()
 	job, err := s.load(jobID)
 	if !requested || err != nil || job.DesiredViewMode != protocol.ViewHeaded {
@@ -273,10 +261,7 @@ func (s *Service) maybeAttachDesired(jobID string) {
 	if job.ViewMode != protocol.ViewAttaching {
 		return
 	}
-	if !s.attachAllowed(job) {
-		return
-	}
-	_, _ = s.launchTUI(context.Background(), job)
+	_, _ = s.launchTUI(context.Background(), job, epoch)
 }
 
 func (s *Service) runItem(ctx context.Context, jobID string, item queued) func() {

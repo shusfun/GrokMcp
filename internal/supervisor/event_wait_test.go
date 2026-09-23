@@ -255,7 +255,7 @@ func TestClosedViewerReportsControlWait(t *testing.T) {
 	s.checkJobStall(j, s.clock.Now())
 	s.checkJobStall(j, s.clock.Now().Add(time.Minute))
 	got := s.snapshot(j.JobID)
-	if got.WaitReason != "input_control" || got.Stalled {
+	if got.WaitReason != "tui_active" || got.Stalled {
 		t.Fatalf("hidden worker misclassified %+v", got)
 	}
 }

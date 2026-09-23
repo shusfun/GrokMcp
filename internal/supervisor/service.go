@@ -44,6 +44,7 @@ type runtime struct {
 	lastActivity     time.Time
 	activityKind     string
 	viewRequested    bool
+	viewEpoch        uint64
 	workerGeneration string
 	busy             bool
 	queue            []queued
@@ -567,14 +568,16 @@ func (s *Service) decorate(job protocol.Job) protocol.Job {
 	job.Stalled = stalled
 	job.StalledReason = reason
 	switch {
-	case job.PauseReason != "":
-		job.WaitReason = job.PauseReason
 	case stalled:
 		job.WaitReason = reason
+	case job.InputOwner == protocol.OwnerTUI:
+		job.WaitReason = "tui_active"
+	case job.InputOwner == protocol.OwnerHandoff:
+		job.WaitReason = "handoff"
+	case job.PauseReason != "":
+		job.WaitReason = job.PauseReason
 	case job.State == protocol.StatePlanReady:
 		job.WaitReason = "approval"
-	case job.InputOwner == protocol.OwnerTUI:
-		job.WaitReason = "input_control"
 	case qlen > 0 && !busy:
 		job.WaitReason = "queued"
 	case busy && (job.LastActivityAt.IsZero() || s.clock.Now().Sub(job.LastActivityAt) > 5*time.Minute):

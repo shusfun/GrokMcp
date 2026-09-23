@@ -291,11 +291,11 @@ func TestDetachDoesNotCancel(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if j.ViewMode != protocol.ViewHeadless || j.State != protocol.StatePlanReady {
+	if j.ViewMode != protocol.ViewHeadless || j.State == protocol.StateCompleted || j.GrokSessionID != "sess-1" {
 		t.Fatalf("%+v", j)
 	}
-	if len(fake.Cancels) != 0 {
-		t.Fatalf("cancel on detach: %v", fake.Cancels)
+	if len(fake.Cancels) != 1 {
+		t.Fatalf("detach added a cancel beyond the handoff yield: %v", fake.Cancels)
 	}
 }
 
@@ -483,18 +483,18 @@ func TestSetViewHeadlessClosesTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.State != protocol.StatePlanReady {
+	if j.State == protocol.StateCompleted {
 		t.Fatalf("%+v", j)
 	}
 	j = waitView(t, s, id, protocol.ViewHeadless)
-	if j.State != protocol.StatePlanReady {
+	if j.State == protocol.StateCompleted || j.GrokSessionID != "sess-1" {
 		t.Fatalf("%+v", j)
 	}
 	if term.HasResume("sess-1") {
 		t.Fatal("terminal handle still open")
 	}
-	if len(fake.Cancels) != 0 {
-		t.Fatalf("cancel on headless: %v", fake.Cancels)
+	if len(fake.Cancels) != 1 {
+		t.Fatalf("headless added a cancel beyond the handoff yield: %v", fake.Cancels)
 	}
 }
 
@@ -573,16 +573,16 @@ func TestAttachAtPlanReadyWhileBusy(t *testing.T) {
 	if j.ViewMode != protocol.ViewHeaded || j.InputOwner != protocol.OwnerTUI {
 		t.Fatalf("view=%s owner=%s", j.ViewMode, j.InputOwner)
 	}
-	if j.State != protocol.StatePlanReady || j.GrokSessionID != "sess-1" {
+	if j.State == protocol.StateCompleted || j.PauseReason != "execution_unknown" || j.GrokSessionID != "sess-1" {
 		t.Fatalf("%+v", j)
 	}
-	if !j.Busy {
-		t.Fatal("attach must not wait for prompt to finish")
+	if j.Busy {
+		t.Fatal("approval handoff left the ACP turn running")
 	}
 	if term.ResumeCount() != 1 {
 		t.Fatalf("resume %v", term.ResumeSnapshot())
 	}
-	if len(fake.Cancels) != 0 {
+	if len(fake.Cancels) != 1 {
 		t.Fatalf("cancel on attach: %v", fake.Cancels)
 	}
 	if fake.PromptCount() != 1 {
@@ -603,8 +603,8 @@ func TestAttachAtPlanReadyWhileBusy(t *testing.T) {
 	}
 	select {
 	case <-block:
-		t.Fatal("plan prompt returned during attach")
 	default:
+		t.Fatal("approval handoff did not release the plan prompt")
 	}
 }
 
@@ -637,26 +637,26 @@ func TestAttachWhenIdleProceedsAtPlanReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.ViewMode != protocol.ViewAttaching {
+	if j.ViewMode != protocol.ViewHeaded {
 		t.Fatalf("view %s", j.ViewMode)
 	}
-	if term.ResumeCount() != 0 {
-		t.Fatalf("resumed before plan_ready: %v", term.ResumeSnapshot())
+	if term.ResumeCount() != 1 {
+		t.Fatalf("busy TUI was not opened: %v", term.ResumeSnapshot())
 	}
 	s.becomePlanReady(j, "plan excerpt")
 	j = waitView(t, s, id, protocol.ViewHeaded)
 	if j.InputOwner != protocol.OwnerTUI || j.State != protocol.StatePlanReady {
 		t.Fatalf("%+v", j)
 	}
-	if term.ResumeCount() == 0 {
-		t.Fatal("expected resume after plan_ready")
+	if term.ResumeCount() != 1 {
+		t.Fatal("plan_ready opened another window")
 	}
 	if len(fake.Cancels) != 0 {
 		t.Fatalf("cancel on attach: %v", fake.Cancels)
 	}
 }
 
-func TestLiveAttachWaitsWhileBusy(t *testing.T) {
+func TestLiveAttachOpensWhileBusy(t *testing.T) {
 	fake := agent.NewFake()
 	fake.Mode = "live"
 	block := make(chan struct{})
@@ -695,16 +695,16 @@ func TestLiveAttachWaitsWhileBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.ViewMode != protocol.ViewAttaching {
+	if j.ViewMode != protocol.ViewHeaded {
 		t.Fatalf("view %s", j.ViewMode)
 	}
-	if term.ResumeCount() != 0 {
-		t.Fatalf("resumed while busy: %v", term.ResumeSnapshot())
+	if term.ResumeCount() != 1 {
+		t.Fatalf("busy TUI was not opened: %v", term.ResumeSnapshot())
 	}
 	close(block)
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if term.ResumeCount() > 0 {
+		if term.ResumeCount() == 1 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -945,9 +945,6 @@ func TestCloseAfterHeadedWindowsCwdUnblocksWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitView(t, s, id, protocol.ViewHeaded)
-	if _, err := decideCurrent(s, context.Background(), protocol.PlanDecideRequest{JobID: id, Decide: protocol.PlanApprove}); err != nil {
-		t.Fatal(err)
-	}
 	done := make(chan error, 1)
 	go func() { done <- s.Close() }()
 	select {
@@ -963,7 +960,13 @@ func TestCloseAfterHeadedWindowsCwdUnblocksWait(t *testing.T) {
 func TestPumpTraceContainsSkipReason(t *testing.T) {
 	s := newTest(t, agent.NewFake(), terminal.NewFake())
 	seedLifecycleJob(t, s, "trace", protocol.StateExecuting)
-	if _, err := s.Followup(context.Background(), protocol.FollowupRequest{JobID: "trace", Prompt: "queued while TUI owns input"}); err != nil {
+	if _, err := s.Followup(context.Background(), protocol.FollowupRequest{JobID: "trace", Prompt: "queued while TUI owns input"}); err != errTUIControl {
+		t.Fatal(err)
+	}
+	if s.snapshot("trace").QueueLength != 0 {
+		t.Fatal("rejected request entered the queue")
+	}
+	if err := s.enqueue("trace", queued{kind: "continue", text: "existing queued work"}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -1013,7 +1016,7 @@ func TestSetViewHeadlessReturnsWithoutWaitingForClose(t *testing.T) {
 	if elapsed > time.Second {
 		t.Fatalf("set_view blocked %s", elapsed)
 	}
-	if j.GrokSessionID != "sess-1" || j.State != protocol.StatePlanReady {
+	if j.GrokSessionID != "sess-1" || j.State == protocol.StateCompleted {
 		t.Fatalf("%+v", j)
 	}
 	close(block)
@@ -1039,11 +1042,11 @@ func TestDetachDoesNotCancelTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	j := waitView(t, s, id, protocol.ViewHeadless)
-	if j.State != protocol.StatePlanReady || j.GrokSessionID != "sess-1" {
+	if j.State == protocol.StateCompleted || j.GrokSessionID != "sess-1" {
 		t.Fatalf("%+v", j)
 	}
-	if len(fake.Cancels) != 0 {
-		t.Fatalf("cancel on detach: %v", fake.Cancels)
+	if len(fake.Cancels) != 1 {
+		t.Fatalf("detach added a cancel beyond the handoff yield: %v", fake.Cancels)
 	}
 }
 
@@ -1179,6 +1182,48 @@ func TestAttachDetachGenerationRejectsStaleWatcher(t *testing.T) {
 	j := waitView(t, s, id, protocol.ViewHeaded)
 	if j.InputOwner != protocol.OwnerTUI {
 		t.Fatalf("%+v", j)
+	}
+}
+
+func TestWatchdogDetectsStaleHandoffOwner(t *testing.T) {
+	fake := agent.NewFake()
+	fake.PromptFn = func(string, string) agent.PromptResult {
+		return agent.PromptResult{PlanReady: true, Text: "plan"}
+	}
+	s := newTest(t, fake, terminal.NewFake())
+	clk := s.clock.(*clock.Fake)
+	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+	})
+	id := res.Jobs[0].JobID
+	waitState(t, s, id, protocol.StatePlanReady)
+	job, _ := s.load(id)
+	job.ViewMode = protocol.ViewHeadless
+	job.InputOwner = protocol.OwnerHandoff
+	s.save(job)
+	s.enqueue(id, queued{kind: "continue", text: "x"})
+	time.Sleep(20 * time.Millisecond)
+	s.inspectWatchdog(clk.Now())
+	clk.Advance(4 * time.Second)
+	s.inspectWatchdog(clk.Now())
+	j, _ := s.Status(context.Background(), id)
+	if !j.Stalled || j.StalledReason != "stale_tui_owner" {
+		t.Fatalf("handoff stall %+v", j)
+	}
+}
+
+func TestConnectionLostReclaimsHandoffOwner(t *testing.T) {
+	s := newTest(t, agent.NewFake(), terminal.NewFake())
+	j := seedWaitJob(t, s, "handoff-lost", protocol.StateNeedsInput)
+	j.InputOwner = protocol.OwnerHandoff
+	j.GrokSessionID = "sess-handoff"
+	if err := s.save(j); err != nil {
+		t.Fatal(err)
+	}
+	s.connectionLost()
+	got := s.snapshot(j.JobID)
+	if got.InputOwner != protocol.OwnerSupervisor || got.State != protocol.StateDisconnected {
+		t.Fatalf("handoff disconnect %+v", got)
 	}
 }
 

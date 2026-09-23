@@ -22,7 +22,7 @@ func NewExec(template, provider string, ag interface{ EnsureLeader(context.Conte
 
 func (e Exec) OpenResume(ctx context.Context, grokPath, sessionID, cwd string) (Handle, error) {
 	if runtime.GOOS == "windows" && e.managed != nil {
-		return e.openViewer(ctx, grokPath, sessionID, cwd, false)
+		return e.openViewer(ctx, grokPath, sessionID, cwd)
 	}
 
 	cmdLine := ResumeCommand(grokPath, sessionID)
@@ -42,7 +42,7 @@ func (e Exec) FocusResume(ctx context.Context, sessionID string) (bool, error) {
 
 func (e Exec) OpenDashboard(ctx context.Context, grokPath, cwd string) error {
 	if runtime.GOOS == "windows" && e.managed != nil {
-		_, err := e.openViewer(ctx, grokPath, "", cwd, false)
+		_, err := e.openViewer(ctx, grokPath, "", cwd)
 		return err
 	}
 

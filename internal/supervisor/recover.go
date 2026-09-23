@@ -17,7 +17,7 @@ func (s *Service) connectionLost() {
 		t.ReleaseWorkers()
 	}
 	for _, rec := range jobs {
-		if rec.Job.State.IsActive() || rec.Job.State == protocol.StatePlanReady || rec.Job.InputOwner == protocol.OwnerTUI {
+		if rec.Job.State.IsActive() || rec.Job.State == protocol.StatePlanReady || rec.Job.InputOwner == protocol.OwnerTUI || rec.Job.InputOwner == protocol.OwnerHandoff {
 			s.Disconnect(rec.Job.JobID)
 		}
 	}

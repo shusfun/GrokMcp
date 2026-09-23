@@ -43,17 +43,10 @@ func (v *terminalView) PID() int {
 		return int(v.pid.Load())
 	}
 }
-func (v *terminalView) Pending() bool {
-	select {
-	case <-v.done:
-		return false
-	default:
-		return v.pid.Load() == 0
-	}
-}
-func (v *terminalView) Wait() error      { <-v.done; return nil }
-func (v *terminalView) WindowID() string { return "" }
-func (v *terminalView) TTY() string      { return "" }
+func (v *terminalView) WorkerReady() bool { return v.worker.alive() && v.PID() > 0 }
+func (v *terminalView) Wait() error       { <-v.done; return nil }
+func (v *terminalView) WindowID() string  { return "" }
+func (v *terminalView) TTY() string       { return "" }
 func (v *terminalView) Close() error {
 	v.once.Do(func() {
 		close(v.done)
@@ -78,22 +71,6 @@ func (v *terminalView) Close() error {
 		}
 	})
 	return nil
-}
-
-func (e Exec) OpenPending(ctx context.Context, bin, sid, cwd string) (Handle, error) {
-	return e.openViewer(ctx, bin, sid, cwd, true)
-}
-func (e Exec) ActivateSession(ctx context.Context, bin, sid, cwd string) error {
-	if err := e.ensure(ctx); err != nil {
-		return err
-	}
-	e.managed.mu.Lock()
-	defer e.managed.mu.Unlock()
-	w := e.managed.workers[sid]
-	if w == nil || e.managed.closed {
-		return errors.New("查看请求已关闭")
-	}
-	return e.activateWorker(w, bin, sid, cwd)
 }
 
 func (e Exec) activateWorker(w *terminalWorker, bin, sid, cwd string) error {
@@ -144,11 +121,9 @@ func (e Exec) activateWorker(w *terminalWorker, bin, sid, cwd string) error {
 	return nil
 }
 
-func (e Exec) openViewer(ctx context.Context, bin, sid, cwd string, pending bool) (Handle, error) {
-	if !pending {
-		if err := e.ensure(ctx); err != nil {
-			return nil, err
-		}
+func (e Exec) openViewer(ctx context.Context, bin, sid, cwd string) (Handle, error) {
+	if err := e.ensure(ctx); err != nil {
+		return nil, err
 	}
 	e.managed.mu.Lock()
 	defer e.managed.mu.Unlock()
@@ -192,12 +167,10 @@ func (e Exec) openViewer(ctx context.Context, bin, sid, cwd string, pending bool
 		e.managed.workers[sid] = w
 		created = true
 	}
-	if !pending {
-		if err := e.activateWorker(w, bin, sid, cwd); err != nil {
-			w.close()
-			delete(e.managed.workers, sid)
-			return nil, err
-		}
+	if err := e.activateWorker(w, bin, sid, cwd); err != nil {
+		w.close()
+		delete(e.managed.workers, sid)
+		return nil, err
 	}
 	v, err := newTerminalView(w)
 	if err != nil {
@@ -358,9 +331,6 @@ func (v *terminalView) serveConnection(c net.Conn, scan *bufio.Scanner) {
 		}
 	}()
 	ready := v.worker.ready
-	if !v.worker.alive() {
-		_ = send(viewFrame{Output: []byte("[当前任务继续在后台执行，正在等待安全的交互边界。]\r\n")})
-	}
 	for {
 		select {
 		case <-v.done:
