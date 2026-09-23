@@ -100,3 +100,18 @@ func (s *Store) Request(id, requestID string) (WorkRequest, error) {
 	err := s.db.QueryRow(`SELECT request_id,prompt,planning,phase FROM work_requests WHERE job_id=? AND request_id=?`, id, requestID).Scan(&r.RequestID, &r.Prompt, &r.Planning, &r.Phase)
 	return r, err
 }
+
+func (s *Store) CancelQueuedRequest(jobID, requestID string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE work_requests SET state='cancelled' WHERE job_id=? AND request_id=? AND phase='queued' AND state<>'cancelled' AND state<>'completed'`, jobID, requestID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func (s *Store) RequestState(jobID, requestID string) (string, error) {
+	var state string
+	err := s.db.QueryRow(`SELECT state FROM work_requests WHERE job_id=? AND request_id=?`, jobID, requestID).Scan(&state)
+	return state, err
+}

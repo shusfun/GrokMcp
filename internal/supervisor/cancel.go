@@ -8,6 +8,14 @@ import (
 )
 
 func (s *Service) CancelTurn(ctx context.Context, id string, expected ...string) (protocol.Job, error) {
+	turnID := ""
+	if len(expected) > 0 {
+		turnID = expected[0]
+	}
+	return s.CancelRequest(ctx, id, "", turnID)
+}
+
+func (s *Service) CancelRequest(ctx context.Context, id, requestID, turnID string) (protocol.Job, error) {
 	rt := s.runtime(id)
 	rt.coord.Lock()
 	job, err := s.load(id)
@@ -20,7 +28,83 @@ func (s *Service) CancelTurn(ctx context.Context, id string, expected ...string)
 		return protocol.Job{}, errJobInactive
 	}
 	s.mu.Lock()
-	if rt.controlPending || (len(expected) > 0 && expected[0] != "" && expected[0] != rt.turnID) {
+	activeTurn := rt.turnID
+	activeRequest := rt.requestID
+	busy := rt.busy
+	queued := false
+	for _, item := range rt.queue {
+		if item.requestID == requestID && requestID != "" {
+			queued = true
+			break
+		}
+	}
+	s.mu.Unlock()
+	if requestID != "" && !queued {
+		if persisted, e := s.store.Request(id, requestID); e == nil && persisted.Phase == "queued" {
+			queued = true
+		}
+	}
+	if requestID != "" && turnID != "" {
+		sameActive := busy && requestID == activeRequest && turnID == activeTurn
+		if !sameActive {
+			rt.coord.Unlock()
+			return protocol.Job{}, errors.New("cancel target does not match one request")
+		}
+	}
+	if requestID != "" && turnID == "" && queued && !(busy && requestID == activeRequest) {
+		if err := s.cancelQueuedLocked(id, requestID); err != nil {
+			rt.coord.Unlock()
+			return protocol.Job{}, err
+		}
+		rt.coord.Unlock()
+		return s.snapshot(id), nil
+	}
+	if requestID != "" && (!busy || requestID != activeRequest) {
+		rt.coord.Unlock()
+		return protocol.Job{}, errors.New("stale or unknown request cancellation")
+	}
+	rt.coord.Unlock()
+	return s.cancelActiveTurn(ctx, id, turnID)
+}
+
+func (s *Service) cancelQueuedLocked(id, requestID string) error {
+	ok, err := s.store.CancelQueuedRequest(id, requestID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("stale or unknown request cancellation")
+	}
+	rt := s.runtime(id)
+	s.mu.Lock()
+	next := rt.queue[:0]
+	for _, item := range rt.queue {
+		if item.requestID != requestID {
+			next = append(next, item)
+		}
+	}
+	rt.queue = next
+	s.mu.Unlock()
+	if job, err := s.load(id); err == nil {
+		s.emit(job)
+	}
+	return nil
+}
+
+func (s *Service) cancelActiveTurn(ctx context.Context, id, expectedTurn string) (protocol.Job, error) {
+	rt := s.runtime(id)
+	rt.coord.Lock()
+	job, err := s.load(id)
+	if err != nil {
+		rt.coord.Unlock()
+		return protocol.Job{}, err
+	}
+	if !acceptsTurnControl(job) {
+		rt.coord.Unlock()
+		return protocol.Job{}, errJobInactive
+	}
+	s.mu.Lock()
+	if rt.controlPending || (expectedTurn != "" && expectedTurn != rt.turnID) {
 		s.mu.Unlock()
 		rt.coord.Unlock()
 		return protocol.Job{}, errors.New("stale or pending turn cancellation")

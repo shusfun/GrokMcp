@@ -256,6 +256,11 @@ func (s *Service) Dispatch(ctx context.Context, req protocol.DispatchRequest) (p
 	if len(req.Tasks) == 0 {
 		return protocol.DispatchResult{}, errors.New("tasks is required")
 	}
+	for _, task := range req.Tasks {
+		if _, err := protocol.ResolvePlanning(task.Planning, false); err != nil {
+			return protocol.DispatchResult{}, err
+		}
+	}
 	if err := s.agent.EnsureLeader(ctx); err != nil {
 		return protocol.DispatchResult{}, err
 	}
@@ -299,6 +304,7 @@ func (s *Service) Dispatch(ctx context.Context, req protocol.DispatchRequest) (p
 		if err != nil {
 			return protocol.DispatchResult{}, err
 		}
+		planning, _ := protocol.ResolvePlanning(task.Planning, false)
 		now := s.clock.Now()
 		job := protocol.Job{
 			JobID: s.ids.JobID(), RequestID: uuid.NewString(), CodexThreadID: task.CodexThreadID, Cwd: cwd, ProjectID: proj.ProjectID,
@@ -306,7 +312,11 @@ func (s *Service) Dispatch(ctx context.Context, req protocol.DispatchRequest) (p
 			ViewMode: protocol.ViewHeadless, DesiredViewMode: protocol.ViewHeadless, InputOwner: protocol.OwnerSupervisor,
 			CreatedAt: now, UpdatedAt: now,
 		}
-		if err := s.store.PutJob(store.Record{Job: job, Accepted: &store.WorkRequest{RequestID: job.RequestID, Prompt: protocol.TaskContract(job.Cwd, job.Title, task.Prompt), Planning: true}}); err != nil {
+		prompt := protocol.ExecuteContract(job.Cwd, job.Title, task.Prompt)
+		if planning {
+			prompt = protocol.TaskContract(job.Cwd, job.Title, task.Prompt)
+		}
+		if err := s.store.PutJob(store.Record{Job: job, Accepted: &store.WorkRequest{RequestID: job.RequestID, Prompt: prompt, Planning: planning}}); err != nil {
 			return protocol.DispatchResult{}, err
 		}
 		job = s.startJob(ctx, job, task)
@@ -349,12 +359,17 @@ func (s *Service) startJob(ctx context.Context, job protocol.Job, task protocol.
 	if err != nil {
 		return s.fail(job, err.Error())
 	}
+	planning, _ := protocol.ResolvePlanning(task.Planning, false)
 	job.GrokSessionID = sid
 	if cwd != "" {
 		job.Cwd = cwd
 	}
-	job.State = protocol.StatePlanning
-	job.LastAction = "Planning"
+	job.State = protocol.StateExecuting
+	job.LastAction = "Executing"
+	if planning {
+		job.State = protocol.StatePlanning
+		job.LastAction = "Planning"
+	}
 	job.DesiredViewMode = protocol.ViewHeadless
 	s.touch(&job)
 	if err := s.put(job, 0, nil); err != nil {
@@ -362,7 +377,11 @@ func (s *Service) startJob(ctx context.Context, job protocol.Job, task protocol.
 		return s.snapshot(job.JobID)
 	}
 	s.emitTrace(job, "info", trace.SourceSupervisor, "job.created", "job started", nil)
-	s.enqueue(job.JobID, queued{kind: "plan", planning: true, requestID: job.RequestID, text: protocol.TaskContract(job.Cwd, job.Title, task.Prompt)})
+	text := protocol.ExecuteContract(job.Cwd, job.Title, task.Prompt)
+	if planning {
+		text = protocol.TaskContract(job.Cwd, job.Title, task.Prompt)
+	}
+	s.enqueue(job.JobID, queued{kind: "plan", planning: planning, requestID: job.RequestID, text: text})
 	return s.snapshot(job.JobID)
 }
 

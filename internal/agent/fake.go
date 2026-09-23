@@ -38,6 +38,8 @@ type Fake struct {
 	LoadBlock            map[string]chan struct{}
 	LoadDelay            time.Duration
 	PlanReadyBeforeBlock string
+	PlanCalls            int
+	ExecModeErr          error
 	planWait             map[string]chan planChoice
 	acpOK                bool
 }
@@ -317,7 +319,14 @@ func (f *Fake) PromptCount() int {
 	return len(f.Prompts)
 }
 
-func (f *Fake) PlanSession(context.Context, string) error { return nil }
+func (f *Fake) PlanSession(context.Context, string) error {
+	f.mu.Lock()
+	f.PlanCalls++
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *Fake) EnsureExecMode(context.Context, string) error { return f.ExecModeErr }
 
 func (f *Fake) SetPlanHandler(fn func(PlanRequest) error) {
 	f.mu.Lock()

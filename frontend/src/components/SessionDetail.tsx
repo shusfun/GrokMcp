@@ -50,7 +50,8 @@ export function SessionDetail({ jobId }: { jobId: string }) {
       </div>
       <p className="mt-1 text-xs text-[var(--muted)]">{job.project} · {job.cwd}</p>
       {job.state === "disconnected" ? <p className="mt-3 text-sm text-[var(--muted)]">任务未自动恢复。点击“继续”将加载原会话。</p> : null}
-      {job.view_mode === "headless" && job.input_owner === "tui" ? <p className="mt-3 text-sm text-[var(--muted)]">交互会话仍在后台运行。重新打开终端可继续操作；退出 Grok TUI 后将执行排队请求。</p> : null}
+      {job.input_owner === "tui" || job.wait_reason === "tui_active" ? <p className="mt-3 text-sm text-[var(--muted)]">TUI 正在查看同一 session。Codex 请求已接受并排队，不会写入终端输入；关闭并退出 Grok TUI 后按原顺序执行。</p> : null}
+      {(job.queued_request_ids ?? []).length > 0 ? <ul className="mt-2 space-y-1 text-xs text-[var(--muted)]">{job.queued_request_ids!.map((id) => <li key={id} className="flex items-center gap-2"><span>排队 {id}</span><button className="text-[var(--accent)]" onClick={() => client.cancelTurn(job.job_id, "", id).then(setJob)}>取消这条</button></li>)}</ul> : null}
       <p className="mt-3 text-sm">等待原因：{waitReasonLabel(job.wait_reason)} · 队列：{job.queue_length ?? 0}</p>
       <p className="mt-1 text-xs text-[var(--muted)]">请求：{job.request_id ?? "历史任务"} · Turn：{job.active_turn_id ?? "无"}</p>
       <p className="mt-1 text-xs text-[var(--muted)]">最近活动：{job.last_activity_at && !job.last_activity_at.startsWith("0001-") ? new Date(job.last_activity_at).toLocaleString() : "暂未收到活动"} {job.activity_kind ?? ""}</p>

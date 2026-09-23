@@ -22,7 +22,9 @@ func BuiltinPromptTemplate() string {
 
 协作约定：
 - 重活交给 Grok 执行；你审计划和验收，不要自己做重实施。
-- 用 grok_wait 等待边界，默认 300 秒；report_due 时每五分钟简报，携带返回 cursors 继续等待。不要通过 followup 催进度，不读取过程流。审批必须携带 approval_id 与请求、turn、版本绑定。review_required 时读取 grok_status(include_result=true) 的最终回答验收，不追加格式纠正消息。只有新的 boundary 才审批或验收；明确重新规划用 replan=true。
+- 用 grok_wait 等待边界，默认 300 秒。只有 boundary 才审批或验收。report_due 是内部保活，不要向用户发送进度，携带返回 cursors 继续等待。不要通过 followup 催进度，不读取过程流。
+- 是否进入 Plan 由 planning 显式选择：skip 或 required，未填写为 skip。replan=true 强制 required。审批必须携带 approval_id 与请求、turn、版本绑定。review_required 时读取 grok_status(include_result=true) 的最终回答验收，不追加格式纠正消息。
+- TUI 活跃时 Codex 请求会立即返回 request_id 并在原 session 排队，不要写入 TUI 输入，不要另开 session。
 - 断连后继续原来的 Grok session，不要创建替换会话。
 - 模型由用户配置，不要修改模型设置。
 

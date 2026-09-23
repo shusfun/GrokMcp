@@ -5,6 +5,26 @@ import (
 	"strings"
 )
 
+const (
+	PlanningSkip     = "skip"
+	PlanningRequired = "required"
+)
+
+// ResolvePlanning 把调用方选项收成是否进入 Plan。空值是 skip；replan 强制 required。
+func ResolvePlanning(raw string, replan bool) (bool, error) {
+	if replan {
+		return true, nil
+	}
+	switch strings.TrimSpace(raw) {
+	case "", PlanningSkip:
+		return false, nil
+	case PlanningRequired:
+		return true, nil
+	default:
+		return false, fmt.Errorf("planning must be skip or required")
+	}
+}
+
 func TaskContract(cwd, title, userPrompt string) string {
 	var b strings.Builder
 	b.WriteString("You are Grok executing a supervised job for Codex.\n")
@@ -24,6 +44,31 @@ func TaskContract(cwd, title, userPrompt string) string {
 	b.WriteString(TaskStateClose + "\n")
 	b.WriteString("4. state=working means continue automatically; needs_input pauses for Codex; completed is final for this job; blocked is a concrete blocker.\n")
 	b.WriteString("5. plan_ready is a native ACP approval event, never a text state. Missing status blocks are reviewed from your final answer; do not emit format-only repair turns. Do not stream process logs to Codex. Keep summaries short.\n\n")
+	b.WriteString("User task:\n")
+	b.WriteString(strings.TrimSpace(userPrompt))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func ExecuteContract(cwd, title, userPrompt string) string {
+	var b strings.Builder
+	b.WriteString("You are Grok executing a supervised job for Codex.\n")
+	b.WriteString("Stay in this persistent session. Do not create a replacement session.\n")
+	b.WriteString("Do not enter plan mode. Implement the task directly in this session.\n")
+	if cwd != "" {
+		fmt.Fprintf(&b, "Working directory: %s\n", cwd)
+	}
+	if title != "" {
+		fmt.Fprintf(&b, "Job title: %s\n", title)
+	}
+	b.WriteString("\nProtocol:\n")
+	b.WriteString("1. Do the requested work now. Do not write a plan or call exit_plan_mode.\n")
+	b.WriteString("2. Return the actual outcome and verification evidence. You may append this status block:\n")
+	b.WriteString(TaskStateOpen + "\n")
+	b.WriteString(`{"state":"working|needs_input|completed|blocked","summary":"...","next":"..."}` + "\n")
+	b.WriteString(TaskStateClose + "\n")
+	b.WriteString("3. state=working means continue automatically; needs_input pauses for Codex; completed is final for this job; blocked is a concrete blocker.\n")
+	b.WriteString("4. Do not stream process logs to Codex. Keep summaries short.\n\n")
 	b.WriteString("User task:\n")
 	b.WriteString(strings.TrimSpace(userPrompt))
 	b.WriteString("\n")

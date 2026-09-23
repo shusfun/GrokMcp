@@ -22,7 +22,7 @@ approval_delivery 区分 pending、submitted、confirmed、unknown、expired。�
 
 ACP turn 结束不等于工作完成。兼容 working / needs_input / completed / blocked 四种标记；缺标记时保存最终回答，返回 needs_input + review_required，不再自动发送格式修复提示。
 
-`grok_status(job_id, include_result=true, request_id)` 读取回答。结果包含 turn_id、offset、next_offset、total、has_more；分页以 Unicode 字符计数，默认 16384、最大 65536。后续页必须固定第一次返回的 turn_id，不跟随更新中的“最新结果”。普通状态和五分钟简报不携带完整回答。
+`grok_status(job_id, include_result=true, request_id)` 读取回答。结果包含 turn_id、offset、next_offset、total、has_more；分页以 Unicode 字符计数，默认 16384、最大 65536。后续页必须固定第一次返回的 turn_id，不跟随更新中的“最新结果”。普通状态和 report_due 保活不携带完整回答。
 
 SQLite 在同一事务中保存任务、接受的请求、结果和边界通知。work_requests.phase 区分 queued、preparing、sent、returned；旧数据无法证明发送情况时保留 unknown。人工恢复时，尚未发送的请求可按已保存提示执行；已发送或结果未知的请求在原 session 核对已有工作，不盲目重发原始任务。启动不自动恢复。
 
@@ -30,11 +30,11 @@ SQLite 在同一事务中保存任务、接受的请求、结果和边界通知�
 
 ## 等待与消费者
 
-`grok_wait` 默认 300 秒，正常到期返回 report_due，关键边界返回 boundary。调用方使用返回 cursors 继续等待，每五分钟简报，不通过 followup 催促或要求模型纠正协议格式。
+`grok_wait` 默认 300 秒，关键边界立即返回 boundary。正常到期返回 report_due，这是内部保活，不生成用户可见进度，也不入队催促。调用方使用返回 cursors 继续等待，不通过 followup 催促或要求模型纠正协议格式。
 
 状态、事件上界来自同一数据库读事务，并与运行态在同一协调器内取快照。当前请求已经被后续状态取代的审批/输入不会再次要求处理。any 等任一目标，all 等所有目标；all 简报不消费部分到达的边界。游标不得超出本次已读取上界，任务删除或持久化失败明确返回错误。
 
-普通 ACP 活动只更新类别和时间，不采集思考或工具输出，不打断等待。安静不等于卡死。用户主动打开 TUI 时直接启动原 session 的交互 worker。若此时 ACP turn 仍占着 session，先取消这一次 in-flight turn，把原请求记为 execution_unknown，不写入虚构结果，再把输入权交给 TUI。TUI 持有输入时显示 tui_active，新 Codex followup/continue 返回控制权冲突，不静默排队。关闭查看窗口不取消后台工作，worker 退出后才归还输入权。ACP 活动 turn 的结果仍按其 request_id 回写；用户在独立 TUI 中输入形成的回答只进入 TUI 输出，现有 ACP 协议不把它映射为原 ACP 请求的最终回答，grok_status 不得据此伪报完成。IPC EOF 释放挂起调用，事件回调在读循环之外执行；关闭等待连接不取消后台工作。
+普通 ACP 活动只更新类别和时间，不采集思考或工具输出，不打断等待。安静不等于卡死。Codex 请求与 TUI 查看是共享同一 Grok session 的两条逻辑通道，写入 ACP 前串行调度。用户打开 TUI 时，若 ACP 写入尚未停在原生审批，则等这次写入返回后再附着，不取消该 turn。若 turn 正停在原生权限调用，只释放这一次调用并记为 execution_unknown，不把 TUI 文本写成该请求的结果。TUI 活跃时新的 Codex 请求立即接受并持久化排队，返回 request_id，不写入 TUI 输入，不创建第二 session。关闭或重开查看窗口不删除、不重排队列；worker 仍占着 session 时不开始 ACP 写入，worker 退出后队列按原顺序继续。ACP 活动 turn 的结果仍按其 request_id 回写；用户在独立 TUI 中输入形成的回答只进入 TUI 输出，现有 ACP 协议不把它映射为原 ACP 请求的最终回答，grok_status 不得据此伪报完成。取消必须绑定排队 request_id 或活动 turn_id，迟到回调不能覆盖其他请求。IPC EOF 释放挂起调用，事件回调在读循环之外执行；关闭等待连接不取消后台工作。
 
 ## 验证边界
 

@@ -153,7 +153,7 @@ func (s *Service) pump(jobID string) {
 			s.skipPump(job, "detaching", qlen)
 			return
 		}
-		if err == nil && job.InputOwner != protocol.OwnerSupervisor && qlen > 0 {
+		if err == nil && s.sessionHeldByTUI(job) && qlen > 0 {
 			reason := "tui_owns"
 			if !s.liveGrok(jobID) {
 				reason = "stale_tui_owner"
@@ -293,7 +293,7 @@ func (s *Service) runItem(ctx context.Context, jobID string, item queued) func()
 			}
 		}
 	}
-	if item.planning && item.kind != "plan" {
+	if item.planning {
 		if err := s.agent.PlanSession(ctx, job.GrokSessionID); err != nil {
 			return func() {
 				if item.gen == s.currentGen(jobID) {
@@ -302,6 +302,16 @@ func (s *Service) runItem(ctx context.Context, jobID string, item queued) func()
 					} else {
 						s.fail(job, err.Error())
 					}
+				}
+			}
+		}
+	} else if err := s.agent.EnsureExecMode(ctx, job.GrokSessionID); err != nil {
+		return func() {
+			if item.gen == s.currentGen(jobID) {
+				if isDisconnect(err) {
+					s.disconnectLocked(jobID, err.Error())
+				} else {
+					s.fail(job, err.Error())
 				}
 			}
 		}

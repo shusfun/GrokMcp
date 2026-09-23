@@ -117,7 +117,10 @@ func (c *Client) CancelTurn(ctx context.Context, jobID string, expectedTurnID ..
 	if len(expectedTurnID) > 0 {
 		turnID = expectedTurnID[0]
 	}
-	return decode[protocol.Job](c.call(ctx, "cancelTurn", map[string]string{"job_id": jobID, "turn_id": turnID}))
+	return c.CancelRequest(ctx, jobID, "", turnID)
+}
+func (c *Client) CancelRequest(ctx context.Context, jobID, requestID, turnID string) (protocol.Job, error) {
+	return decode[protocol.Job](c.call(ctx, "cancelTurn", map[string]string{"job_id": jobID, "turn_id": turnID, "request_id": requestID}))
 }
 func (c *Client) SetView(ctx context.Context, req protocol.SetViewRequest) (protocol.Job, error) {
 	return decode[protocol.Job](c.call(ctx, "setView", req))

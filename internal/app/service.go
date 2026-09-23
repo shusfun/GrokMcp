@@ -243,8 +243,8 @@ func (s *Service) RestartUpdate(ctx context.Context) error {
 func (s *Service) PlanDecideBound(ctx context.Context, jobID, decide, notes, requestID, turnID string, planVersion int64, approvalID string) (protocol.Job, error) {
 	return s.Backend.PlanDecide(ctx, protocol.PlanDecideRequest{JobID: jobID, Decide: protocol.PlanDecision(decide), Notes: notes, RequestID: requestID, TurnID: turnID, PlanVersion: planVersion, ApprovalID: approvalID})
 }
-func (s *Service) CancelTurnBound(ctx context.Context, jobID, turnID string) (protocol.Job, error) {
-	return s.Backend.CancelTurn(ctx, jobID, turnID)
+func (s *Service) CancelTurnBound(ctx context.Context, jobID, turnID, requestID string) (protocol.Job, error) {
+	return s.Backend.CancelRequest(ctx, jobID, requestID, turnID)
 }
 
 func (s *Service) ReadResult(ctx context.Context, jobID, requestID, turnID string, offset, limit int) (protocol.Job, error) {

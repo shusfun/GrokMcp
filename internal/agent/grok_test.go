@@ -43,6 +43,20 @@ func TestPlanModeIDFallbackWhenUnadvertised(t *testing.T) {
 	}
 }
 
+func TestExecModeLeavesPlan(t *testing.T) {
+	t.Parallel()
+	id, err := execModeID(&acp.SessionModeState{AvailableModes: []acp.SessionMode{{Id: "plan", Name: "Plan"}, {Id: "agent", Name: "Agent"}}})
+	if err != nil || id != "agent" {
+		t.Fatalf("id=%q err=%v", id, err)
+	}
+	if _, err = execModeID(&acp.SessionModeState{AvailableModes: []acp.SessionMode{{Id: "plan", Name: "Plan"}}}); err == nil {
+		t.Fatal("plan-only session should not pretend to skip")
+	}
+	if modeIsPlan("agent", &acp.SessionModeState{CurrentModeId: "agent"}) {
+		t.Fatal("agent mode classified as plan")
+	}
+}
+
 func TestSetPlanModeNilModesCallsPlan(t *testing.T) {
 	t.Parallel()
 	var got acp.SetSessionModeRequest

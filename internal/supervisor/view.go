@@ -190,6 +190,9 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job, epoch uint64)
 		s.emitTerm(job, "info", "terminal.focused", "existing TUI focused", h, true, "ok", "")
 		return s.commitHeaded(job, h, epoch)
 	}
+	if s.deferInteractiveAttach(job) {
+		return s.snapshot(job.JobID), nil
+	}
 	if err := s.yieldInFlightTurn(job); err != nil {
 		s.emitTerm(job, "error", "terminal.opened", err.Error(), nil, false, "error", err.Error())
 		return s.failHeadless(job, epoch, err)
@@ -231,6 +234,39 @@ func (s *Service) launchTUI(ctx context.Context, job protocol.Job, epoch uint64)
 	}
 	s.emitTerm(job, "info", "terminal.opened", "TUI opened", h, false, "ok", "")
 	return s.commitHeaded(job, h, epoch)
+}
+
+func (s *Service) sessionHeldByTUI(job protocol.Job) bool {
+	if job.InputOwner == protocol.OwnerTUI || job.InputOwner == protocol.OwnerHandoff {
+		return true
+	}
+	return s.liveGrok(job.JobID)
+}
+
+func (s *Service) requestQueued(jobID, requestID string) bool {
+	if requestID == "" {
+		return false
+	}
+	rt := s.runtime(jobID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range rt.queue {
+		if item.requestID == requestID {
+			return true
+		}
+	}
+	return false
+}
+
+// 非审批占用的 ACP 写入结束前不启动交互 worker，避免抢同一 session。
+func (s *Service) deferInteractiveAttach(job protocol.Job) bool {
+	if approvalHoldsTurn(job) {
+		return false
+	}
+	rt := s.runtime(job.JobID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return rt.busy
 }
 
 func approvalHoldsTurn(job protocol.Job) bool {

@@ -19,8 +19,9 @@ func Run(ctx context.Context, backend core.Backend) error {
 	return server.Run(ctx, &mcp.StdioTransport{})
 }
 
-const instructions = `可委派工作默认交给 Grok。Codex 审计划和验收。
-用 grok_wait 等待关键边界，默认 300 秒。report_due 是正常五分钟简报，简短汇报当前状态后携带返回 cursors 继续等待。boundary 才处理审批、输入、失败或验收。不要用 followup 催进度，不读取过程流；停止等待不会取消任务。
+const instructions = `可委派工作默认交给 Grok。是否进入 Plan 由调用方用 planning=required 显式选择，未填写则 skip。Codex 只在调用方要求规划时审计划，并验收结果。
+用 grok_wait 等待关键边界，默认 300 秒。boundary 才处理审批、输入、失败或验收。report_due 是内部保活，不要向用户发送进度消息，携带返回 cursors 继续等待。不要用 followup 催进度，不读取过程流；停止等待不会取消任务。
+TUI 查看与 Codex 请求共享同一 session。TUI 活跃时追加请求会立即返回 request_id 并排队，不要写入 TUI 输入，不要另开 session。
 断连或 Codex 重启后继续原来的 Grok session，不要创建替换会话。
 不要修改用户的模型或推理设置。`
 
@@ -31,12 +32,12 @@ func newServer(backend core.Backend) *mcp.Server {
 }
 
 func addTools(server *mcp.Server, backend core.Backend) {
-	mcp.AddTool(server, &mcp.Tool{Name: "grok_dispatch", Description: "批量创建任务，默认 headless，返回 job 与 session 映射。", Annotations: annExec},
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_dispatch", Description: "批量创建任务，默认 headless，返回 job 与 session 映射。tasks[].planning 为 skip 或 required，未填写为 skip。", Annotations: annExec},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.DispatchRequest) (*mcp.CallToolResult, protocol.DispatchResult, error) {
 			out, err := backend.Dispatch(ctx, in)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "grok_wait", Description: "等待新的 any/all 边界，默认 300 秒。返回 boundary 或正常 report_due；下一次原样携带 cursors。常规活动不打断等待，不返回过程输出。", Annotations: annWait},
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_wait", Description: "等待新的 any/all 边界，默认 300 秒。关键边界立即返回 boundary。report_due 是内部保活，不要据此向用户发送进度。下一次原样携带 cursors。不返回过程输出。", Annotations: annWait},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.WaitRequest) (*mcp.CallToolResult, protocol.WaitResult, error) {
 			out, err := backend.Wait(ctx, in)
 			return nil, out, err
@@ -46,17 +47,18 @@ func addTools(server *mcp.Server, backend core.Backend) {
 			out, err := backend.PlanDecide(ctx, in)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "grok_followup", Description: "向同一 session 追加新工作。replan=true 重新规划；默认沿用批准阶段，没有批准记录则先规划。不要用于催进度。", Annotations: annExec},
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_followup", Description: "向同一 session 追加新工作。planning 为 skip 或 required，未填写为 skip；replan=true 强制 required。忙或 TUI 活跃时立即返回 accepted_request_id 并排队，不写入 TUI，不新建 session。不要用于催进度。", Annotations: annExec},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.FollowupRequest) (*mcp.CallToolResult, protocol.Job, error) {
 			out, err := backend.Followup(ctx, in)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "grok_cancel_turn", Description: "取消当前 turn，保留 session 和排队状态。", Annotations: annCancelTurn},
+	mcp.AddTool(server, &mcp.Tool{Name: "grok_cancel_turn", Description: "取消一条排队请求或当前 turn。request_id 取消尚未发送的请求；turn_id 取消活动 turn。两者都传时必须指向同一目标。保留 session 和其他排队项。", Annotations: annCancelTurn},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			TurnID string `json:"turn_id,omitempty" jsonschema:"active_turn_id from the current job; rejects stale cancellation"`
-			JobID  string `json:"job_id" jsonschema:"job id"`
+			TurnID    string `json:"turn_id,omitempty" jsonschema:"active turn id; rejects a stale turn"`
+			RequestID string `json:"request_id,omitempty" jsonschema:"queued or active request id"`
+			JobID     string `json:"job_id" jsonschema:"job id"`
 		}) (*mcp.CallToolResult, protocol.Job, error) {
-			out, err := backend.CancelTurn(ctx, in.JobID, in.TurnID)
+			out, err := backend.CancelRequest(ctx, in.JobID, in.RequestID, in.TurnID)
 			return nil, out, err
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "grok_set_view", Description: "在 headless 与 headed 之间切换，不重建任务。", Annotations: annSetView},

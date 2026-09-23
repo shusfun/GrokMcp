@@ -155,7 +155,7 @@ export type Client = {
   events(jobId: string): Promise<BoundaryEvent[]>;
   statusBar(): Promise<StatusBar>;
   setView(jobId: string, view: string): Promise<Job>;
-  cancelTurn(jobId: string, turnId?: string): Promise<Job>;
+  cancelTurn(jobId: string, turnId?: string, requestId?: string): Promise<Job>;
   continueJob(jobId: string): Promise<Job>;
   planDecide(jobId: string, decide: "approve" | "revise" | "cancel", notes?: string, binding?: Pick<Job, "approval_id" | "request_id" | "plan_turn_id" | "plan_version">): Promise<Job>;
   openTerminal(jobId: string, dashboard?: boolean): Promise<void>;

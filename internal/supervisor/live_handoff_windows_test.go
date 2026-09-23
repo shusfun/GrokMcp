@@ -86,7 +86,8 @@ func TestLiveHandoffDuringACPApproval(t *testing.T) {
 	res, err := s.Dispatch(ctx, protocol.DispatchRequest{
 		Cwd: work,
 		Tasks: []protocol.DispatchTask{{
-			Prompt: "Plan a tiny read-only task: reply HANDOFF_ACP_OK. Request native plan approval before doing anything. Do not modify files.",
+			Planning: protocol.PlanningRequired,
+			Prompt:   "Plan a tiny read-only task: reply HANDOFF_ACP_OK. Request native plan approval before doing anything. Do not modify files.",
 		}},
 	})
 	if err != nil {
@@ -160,14 +161,18 @@ func TestLiveHandoffDuringACPApproval(t *testing.T) {
 	if !strings.Contains(output, "HANDOFF_TUI_REPLY") {
 		t.Fatalf("TUI did not return a complete model reply; alive=%v output=%q", term.WorkerAlive(sessionID), tail(output, 1200))
 	}
-	if _, err = s.Followup(ctx, protocol.FollowupRequest{JobID: id, Prompt: "steal"}); err != errTUIControl {
-		t.Fatalf("followup during TUI control = %v", err)
+	accepted, err := s.Followup(ctx, protocol.FollowupRequest{JobID: id, Prompt: "steal"})
+	if err != nil || accepted.AcceptedRequestID == "" || accepted.GrokSessionID != sessionID {
+		t.Fatalf("followup during TUI was not queued on the original session: %+v %v", accepted, err)
 	}
-	if _, err = s.Continue(ctx, id); err != errTUIControl {
-		t.Fatalf("continue during TUI control = %v", err)
+	if _, err = s.Continue(ctx, id); err != nil {
+		t.Fatalf("continue during TUI = %v", err)
 	}
-	if s.snapshot(id).QueueLength != 0 {
-		t.Fatal("rejected Codex request entered the queue")
+	if s.snapshot(id).QueueLength == 0 {
+		t.Fatal("Codex request was not queued while TUI was active")
+	}
+	if strings.Contains(string(term.SessionOutput(sessionID)), "steal") {
+		t.Fatal("Codex followup was written into the TUI input stream")
 	}
 	got, err := s.Status(ctx, id, protocol.ResultQuery{IncludeResult: true, RequestID: requestID})
 	if err == nil && (got.State == protocol.StateCompleted || strings.Contains(got.Result.Text, "HANDOFF_TUI_REPLY")) {

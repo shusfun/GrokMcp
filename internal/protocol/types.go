@@ -136,6 +136,7 @@ type Settings struct {
 type DispatchTask struct {
 	Title         string `json:"title,omitempty"`
 	Prompt        string `json:"prompt"`
+	Planning      string `json:"planning,omitempty" jsonschema:"skip or required; omitted means skip"`
 	Cwd           string `json:"cwd,omitempty"`
 	ProjectID     string `json:"project_id,omitempty"`
 	Worktree      bool   `json:"worktree,omitempty"`
@@ -188,7 +189,8 @@ type PlanDecideRequest struct {
 }
 
 type FollowupRequest struct {
-	Replan bool `json:"replan,omitempty" jsonschema:"explicitly request a new plan in the original session"`
+	Replan   bool   `json:"replan,omitempty" jsonschema:"forces planning=required in the original session"`
+	Planning string `json:"planning,omitempty" jsonschema:"skip or required; omitted means skip; replan=true forces required"`
 
 	JobID  string `json:"job_id"`
 	Prompt string `json:"prompt"`

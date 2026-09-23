@@ -141,13 +141,14 @@ func (s *Server) dispatch(ctx context.Context, req Request) (json.RawMessage, er
 		return marshal(out, err)
 	case "cancelTurn":
 		var in struct {
-			TurnID string `json:"turn_id,omitempty"`
-			JobID  string `json:"job_id"`
+			TurnID    string `json:"turn_id,omitempty"`
+			RequestID string `json:"request_id,omitempty"`
+			JobID     string `json:"job_id"`
 		}
 		if err := json.Unmarshal(req.Params, &in); err != nil {
 			return nil, err
 		}
-		out, err := s.svc.CancelTurn(ctx, in.JobID, in.TurnID)
+		out, err := s.svc.CancelRequest(ctx, in.JobID, in.RequestID, in.TurnID)
 		return marshal(out, err)
 	case "setView":
 		var in protocol.SetViewRequest

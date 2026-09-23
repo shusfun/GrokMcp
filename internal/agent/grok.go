@@ -64,6 +64,7 @@ type Grok struct {
 	conn            *acp.ClientSideConnection
 	client          *acpClient
 	last            map[string]string
+	modes           map[string]*acp.SessionModeState
 	plan            map[string]bool
 	pending         map[string]chan planChoice
 	pendingNotes    map[string]bool
@@ -150,9 +151,7 @@ func (g *Grok) NewSession(ctx context.Context, cwd string, worktree bool) (strin
 		return "", "", err
 	}
 	id := string(resp.SessionId)
-	if err := setPlanMode(ctx, conn.SetSessionMode, resp.SessionId, resp.Modes); err != nil {
-		return "", "", err
-	}
+	g.rememberModes(id, resp.Modes)
 	g.mu.Lock()
 	if g.loaded == nil {
 		g.loaded = map[string]bool{}
@@ -477,6 +476,34 @@ func setPlanMode(ctx context.Context, set sessionModeSetter, sessionID acp.Sessi
 	return nil
 }
 
+func modeIsPlan(id acp.SessionModeId, modes *acp.SessionModeState) bool {
+	if strings.Contains(strings.ToLower(string(id)), "plan") {
+		return true
+	}
+	if modes == nil {
+		return false
+	}
+	for _, m := range modes.AvailableModes {
+		if m.Id == id && strings.Contains(strings.ToLower(m.Name), "plan") {
+			return true
+		}
+	}
+	return false
+}
+
+func execModeID(modes *acp.SessionModeState) (acp.SessionModeId, error) {
+	if modes == nil {
+		return "", errors.New("session is in plan mode and no non-plan mode is available")
+	}
+	for _, m := range modes.AvailableModes {
+		label := strings.ToLower(string(m.Id) + " " + m.Name)
+		if !strings.Contains(label, "plan") {
+			return m.Id, nil
+		}
+	}
+	return "", errors.New("session is in plan mode and no non-plan mode is available")
+}
+
 func planModeID(modes *acp.SessionModeState) (acp.SessionModeId, error) {
 	if modes == nil || len(modes.AvailableModes) == 0 {
 		return "plan", nil
@@ -504,12 +531,62 @@ func gitWorktree(cwd string) (string, error) {
 	return dir, nil
 }
 
+func (g *Grok) rememberModes(sessionID string, modes *acp.SessionModeState) {
+	if modes == nil {
+		return
+	}
+	copied := *modes
+	g.mu.Lock()
+	if g.modes == nil {
+		g.modes = map[string]*acp.SessionModeState{}
+	}
+	g.modes[sessionID] = &copied
+	g.mu.Unlock()
+}
+
 func (g *Grok) PlanSession(ctx context.Context, sessionID string) error {
 	g.mu.Lock()
 	conn := g.conn
+	modes := g.modes[sessionID]
 	g.mu.Unlock()
 	if conn == nil {
 		return ErrDisconnected
 	}
-	return setPlanMode(ctx, conn.SetSessionMode, acp.SessionId(sessionID), nil)
+	if err := setPlanMode(ctx, conn.SetSessionMode, acp.SessionId(sessionID), modes); err != nil {
+		return err
+	}
+	mode, _ := planModeID(modes)
+	g.mu.Lock()
+	if g.modes != nil && g.modes[sessionID] != nil {
+		g.modes[sessionID].CurrentModeId = mode
+	}
+	g.mu.Unlock()
+	return nil
+}
+
+// EnsureExecMode 只在当前模式已经是 plan 时切出。没有非 plan 模式则失败，避免把 skip 当成已离开 Plan。
+func (g *Grok) EnsureExecMode(ctx context.Context, sessionID string) error {
+	g.mu.Lock()
+	conn := g.conn
+	modes := g.modes[sessionID]
+	g.mu.Unlock()
+	if conn == nil {
+		return ErrDisconnected
+	}
+	if modes == nil || !modeIsPlan(modes.CurrentModeId, modes) {
+		return nil
+	}
+	id, err := execModeID(modes)
+	if err != nil {
+		return err
+	}
+	if _, err := conn.SetSessionMode(ctx, acp.SetSessionModeRequest{SessionId: acp.SessionId(sessionID), ModeId: id}); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	if g.modes != nil && g.modes[sessionID] != nil {
+		g.modes[sessionID].CurrentModeId = id
+	}
+	g.mu.Unlock()
+	return nil
 }

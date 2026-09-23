@@ -14,7 +14,6 @@ import (
 var (
 	errPlanPending = errors.New("plan pending decision")
 	errJobInactive = errors.New("job is no longer active")
-	errTUIControl  = errors.New("交互会话正由 TUI 控制；请在终端输入，待交互进程退出后再发送 Codex 请求")
 )
 
 func acceptsTurnControl(job protocol.Job) bool {
@@ -33,6 +32,16 @@ func (s *Service) applyPromptResult(jobID string, item queued, res agent.PromptR
 	if item.gen != s.currentGen(jobID) {
 		return
 	}
+	if state, err := s.store.RequestState(jobID, item.requestID); err == nil && state == "cancelled" {
+		return
+	}
+	s.mu.Lock()
+	rt := s.rt[jobID]
+	if rt != nil && ((rt.turnID != "" && rt.turnID != item.turnID) || (rt.busy && rt.requestID != "" && rt.requestID != item.requestID)) {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
 	rec, err := s.record(jobID)
 	if err != nil {
 		return
@@ -48,7 +57,7 @@ func (s *Service) applyPromptResult(jobID string, item queued, res agent.PromptR
 		job.ApprovalDelivery = "confirmed"
 	}
 	s.mu.Lock()
-	rt := s.rt[jobID]
+	rt = s.rt[jobID]
 	pending := len(rt.queue) > 0
 	job.LastActivityAt = rt.lastActivity
 	job.ActivityKind = rt.activityKind
@@ -108,6 +117,10 @@ func (s *Service) Followup(ctx context.Context, req protocol.FollowupRequest) (p
 	if strings.TrimSpace(req.Prompt) == "" {
 		return protocol.Job{}, errors.New("prompt is required")
 	}
+	planning, err := protocol.ResolvePlanning(req.Planning, req.Replan)
+	if err != nil {
+		return protocol.Job{}, err
+	}
 	rt := s.runtime(req.JobID)
 	rt.coord.Lock()
 	defer rt.coord.Unlock()
@@ -118,18 +131,15 @@ func (s *Service) Followup(ctx context.Context, req protocol.FollowupRequest) (p
 	if job.State == protocol.StateCancelled {
 		return s.decorate(job), errJobInactive
 	}
-	if job.InputOwner != protocol.OwnerSupervisor {
-		return s.decorate(job), errTUIControl
-	}
 	if job.State == protocol.StatePlanReady && job.PauseReason != "approval_expired" {
 		return s.decorate(job), errPlanPending
 	}
 	requestID := uuid.NewString()
-	planning := req.Replan || !job.Approved
 	s.mu.Lock()
 	busy := rt.busy
 	s.mu.Unlock()
-	if !busy {
+	held := s.sessionHeldByTUI(job)
+	if !busy && !held {
 		job.RequestID = requestID
 		job.LastSummary = ""
 		job.LastAction = "Accepted"
@@ -145,12 +155,12 @@ func (s *Service) Followup(ctx context.Context, req protocol.FollowupRequest) (p
 		s.touch(&job)
 
 	}
-	text := req.Prompt
+	text := protocol.ExecuteContract(job.Cwd, job.Title, req.Prompt)
 	if planning {
 		text = protocol.TaskContract(job.Cwd, job.Title, req.Prompt)
 	}
 	accepted := (*protocol.Job)(nil)
-	if !busy {
+	if !busy && !held {
 		accepted = &job
 	}
 	if err := s.enqueue(req.JobID, queued{acceptedJob: accepted, connect: true, kind: "followup", text: text, requestID: requestID, planning: planning}); err != nil {
@@ -177,20 +187,29 @@ func (s *Service) Continue(ctx context.Context, jobID string) (protocol.Job, err
 	if !acceptsTurnControl(job) {
 		return protocol.Job{}, errJobInactive
 	}
-	if job.InputOwner != protocol.OwnerSupervisor {
-		return s.decorate(job), errTUIControl
-	}
 	if job.State == protocol.StatePlanReady && job.PauseReason != "approval_expired" {
 		return s.decorate(job), errPlanPending
 	}
-	planning := !job.Approved || job.ApprovalDelivery == "unknown" || job.PauseReason == "approval_expired"
+	planning := false
 	text := protocol.ContinuePrompt()
-	if prior, e := s.store.Request(jobID, job.RequestID); e == nil && (prior.Phase == "queued" || prior.Phase == "preparing") {
-		text = prior.Prompt
+	if prior, e := s.store.Request(jobID, job.RequestID); e == nil {
 		planning = prior.Planning
+		if prior.Phase == "queued" || prior.Phase == "preparing" {
+			text = prior.Prompt
+		}
 	}
-	if planning {
+	if planning && !strings.Contains(text, "exit_plan_mode") {
 		text = "Resume this original session. Reconcile work already performed; do not repeat side effects. Present the existing or revised plan using the native exit_plan_mode approval request before implementation.\n" + text
+	}
+	if s.sessionHeldByTUI(job) {
+		if !s.requestQueued(jobID, job.RequestID) {
+			if err := s.enqueue(jobID, queued{connect: true, kind: "continue", text: text, requestID: job.RequestID, planning: planning}); err != nil {
+				return protocol.Job{}, err
+			}
+		}
+		out := s.snapshot(jobID)
+		out.AcceptedRequestID = job.RequestID
+		return out, nil
 	}
 	job.State = protocol.StateExecuting
 	if planning {

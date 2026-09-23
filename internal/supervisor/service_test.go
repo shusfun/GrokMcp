@@ -113,7 +113,7 @@ func TestPlanRequiresApprove(t *testing.T) {
 	}
 	s := newTest(t, fake, terminal.NewFake())
 	res, _ := s.Dispatch(context.Background(), protocol.DispatchRequest{
-		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Planning: protocol.PlanningRequired, Prompt: "x"}},
 	})
 	waitState(t, s, res.Jobs[0].JobID, protocol.StatePlanReady)
 	time.Sleep(50 * time.Millisecond)
@@ -615,7 +615,7 @@ func TestAttachWhenIdleProceedsAtPlanReady(t *testing.T) {
 	term := terminal.NewFake()
 	s := newTest(t, fake, term)
 	res, err := s.Dispatch(context.Background(), protocol.DispatchRequest{
-		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Prompt: "x"}},
+		Cwd: "/tmp/p", Tasks: []protocol.DispatchTask{{Planning: protocol.PlanningRequired, Prompt: "x"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -637,22 +637,16 @@ func TestAttachWhenIdleProceedsAtPlanReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.ViewMode != protocol.ViewHeaded {
-		t.Fatalf("view %s", j.ViewMode)
-	}
-	if term.ResumeCount() != 1 {
-		t.Fatalf("busy TUI was not opened: %v", term.ResumeSnapshot())
+	if j.ViewMode == protocol.ViewHeaded || term.ResumeCount() != 0 || len(fake.Cancels) != 0 {
+		t.Fatalf("in-flight ACP write opened TUI early: view=%s resumes=%d cancels=%d", j.ViewMode, term.ResumeCount(), len(fake.Cancels))
 	}
 	s.becomePlanReady(j, "plan excerpt")
 	j = waitView(t, s, id, protocol.ViewHeaded)
-	if j.InputOwner != protocol.OwnerTUI || j.State != protocol.StatePlanReady {
+	if j.InputOwner != protocol.OwnerTUI || j.GrokSessionID == "" {
 		t.Fatalf("%+v", j)
 	}
 	if term.ResumeCount() != 1 {
-		t.Fatal("plan_ready opened another window")
-	}
-	if len(fake.Cancels) != 0 {
-		t.Fatalf("cancel on attach: %v", fake.Cancels)
+		t.Fatal("approval boundary did not attach the original session")
 	}
 }
 
@@ -695,11 +689,8 @@ func TestLiveAttachOpensWhileBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.ViewMode != protocol.ViewHeaded {
-		t.Fatalf("view %s", j.ViewMode)
-	}
-	if term.ResumeCount() != 1 {
-		t.Fatalf("busy TUI was not opened: %v", term.ResumeSnapshot())
+	if j.ViewMode == protocol.ViewHeaded || term.ResumeCount() != 0 {
+		t.Fatalf("busy implement turn opened TUI early: view=%s resumes=%v", j.ViewMode, term.ResumeSnapshot())
 	}
 	close(block)
 	deadline = time.Now().Add(2 * time.Second)
@@ -709,7 +700,7 @@ func TestLiveAttachOpensWhileBusy(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("expected resume after idle, got %v", term.ResumeSnapshot())
+	t.Fatalf("expected resume after ACP write returned, got %v", term.ResumeSnapshot())
 }
 
 func TestReviseIgnoresOldNeedsInputMarker(t *testing.T) {
@@ -960,11 +951,9 @@ func TestCloseAfterHeadedWindowsCwdUnblocksWait(t *testing.T) {
 func TestPumpTraceContainsSkipReason(t *testing.T) {
 	s := newTest(t, agent.NewFake(), terminal.NewFake())
 	seedLifecycleJob(t, s, "trace", protocol.StateExecuting)
-	if _, err := s.Followup(context.Background(), protocol.FollowupRequest{JobID: "trace", Prompt: "queued while TUI owns input"}); err != errTUIControl {
-		t.Fatal(err)
-	}
-	if s.snapshot("trace").QueueLength != 0 {
-		t.Fatal("rejected request entered the queue")
+	accepted, err := s.Followup(context.Background(), protocol.FollowupRequest{JobID: "trace", Prompt: "queued while TUI owns input"})
+	if err != nil || accepted.AcceptedRequestID == "" || s.snapshot("trace").QueueLength == 0 {
+		t.Fatalf("TUI-active followup was not queued: %+v %v", accepted, err)
 	}
 	if err := s.enqueue("trace", queued{kind: "continue", text: "existing queued work"}); err != nil {
 		t.Fatal(err)

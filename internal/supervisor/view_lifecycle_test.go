@@ -136,11 +136,12 @@ func TestClosingViewDoesNotCancelWorkerAndReturnsControlAtWorkerExit(t *testing.
 	if !term.alive.Load() || got.InputOwner != protocol.OwnerTUI || len(f.Cancels) != 0 {
 		t.Fatalf("view close cancelled execution: %+v", got)
 	}
-	if _, err = s.Followup(context.Background(), protocol.FollowupRequest{JobID: id, Prompt: "next"}); err != errTUIControl {
-		t.Fatalf("followup during TUI control = %v", err)
+	accepted, err := s.Followup(context.Background(), protocol.FollowupRequest{JobID: id, Prompt: "next"})
+	if err != nil || accepted.AcceptedRequestID == "" || accepted.QueueLength == 0 {
+		t.Fatalf("followup during TUI was not queued: %+v %v", accepted, err)
 	}
-	if f.PromptCount() != 1 {
-		t.Fatal("control was stolen before safe boundary")
+	if f.PromptCount() != 1 || accepted.GrokSessionID != job.GrokSessionID {
+		t.Fatal("queued followup wrote ACP or replaced the session")
 	}
 	term.alive.Store(false)
 	term.exit(job.GrokSessionID, "fixture-worker")
@@ -155,15 +156,13 @@ func TestClosingViewDoesNotCancelWorkerAndReturnsControlAtWorkerExit(t *testing.
 	if got.InputOwner != protocol.OwnerSupervisor {
 		t.Fatalf("worker exit did not return control: %+v", got)
 	}
-	if got.GrokSessionID != job.GrokSessionID || f.PromptCount() != 1 || len(f.NewCalls) != 1 {
-		t.Fatal("handoff replaced session or executed rejected prompt")
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && f.PromptCount() < 2 {
+		time.Sleep(10 * time.Millisecond)
 	}
-	if _, err = s.Followup(context.Background(), protocol.FollowupRequest{JobID: id, Prompt: "next"}); err != nil {
-		t.Fatal(err)
-	}
-	got = waitState(t, s, id, protocol.StateCompleted)
+	got = s.snapshot(id)
 	if got.GrokSessionID != job.GrokSessionID || f.PromptCount() != 2 || len(f.NewCalls) != 1 {
-		t.Fatal("followup after handoff did not use original session")
+		t.Fatalf("queued followup did not resume on the original session: prompts=%d news=%d %+v", f.PromptCount(), len(f.NewCalls), got)
 	}
 }
 
@@ -186,14 +185,14 @@ func TestOpeningBusyViewActivatesWorkerImmediately(t *testing.T) {
 	if _, err = s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
 		t.Fatal(err)
 	}
-	if term.ResumeCount() != 1 {
-		t.Fatal("busy view did not activate worker immediately")
+	if term.ResumeCount() != 0 || len(f.Cancels) != 0 {
+		t.Fatal("busy view activated a worker before the ACP write returned")
 	}
 	if _, err = s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeaded}); err != nil {
 		t.Fatal(err)
 	}
-	if term.ResumeCount() != 1 {
-		t.Fatal("repeated request opened another window")
+	if term.ResumeCount() != 0 {
+		t.Fatal("repeated request opened a worker before the ACP write returned")
 	}
 	if _, err = s.SetView(context.Background(), protocol.SetViewRequest{JobID: id, View: protocol.ViewHeadless}); err != nil {
 		t.Fatal(err)
@@ -201,8 +200,8 @@ func TestOpeningBusyViewActivatesWorkerImmediately(t *testing.T) {
 	waitView(t, s, id, protocol.ViewHeadless)
 	close(block)
 	waitState(t, s, id, protocol.StateCompleted)
-	if term.ResumeCount() != 1 || len(f.Cancels) != 0 {
-		t.Fatal("closing busy viewer stopped worker or turn")
+	if term.ResumeCount() != 0 || len(f.Cancels) != 0 {
+		t.Fatal("closing a deferred view stopped the ACP turn or started a worker")
 	}
 }
 
@@ -232,11 +231,12 @@ func TestOpeningApprovalYieldsTurnWithoutFakeResult(t *testing.T) {
 	if _, err = s.Status(context.Background(), id, protocol.ResultQuery{IncludeResult: true, RequestID: job.RequestID}); err == nil {
 		t.Fatal("yielded approval stored a result")
 	}
-	if _, err = s.Followup(context.Background(), protocol.FollowupRequest{JobID: id, Prompt: "next"}); err != errTUIControl {
-		t.Fatalf("followup during yielded TUI = %v", err)
+	accepted, err := s.Followup(context.Background(), protocol.FollowupRequest{JobID: id, Prompt: "next"})
+	if err != nil || accepted.AcceptedRequestID == "" || accepted.QueueLength == 0 {
+		t.Fatalf("followup during yielded TUI was not queued: %+v %v", accepted, err)
 	}
-	if s.snapshot(id).QueueLength != 0 {
-		t.Fatal("rejected followup entered the queue")
+	if f.PromptCount() != 1 {
+		t.Fatal("queued followup wrote ACP while TUI held the session")
 	}
 }
 

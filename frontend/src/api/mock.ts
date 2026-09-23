@@ -286,8 +286,15 @@ export const mockClient: Client = {
     emit();
     return { ...job };
   },
-  async cancelTurn(jobId, turnId) {
+  async cancelTurn(jobId, turnId, requestId) {
     const job = find(jobId);
+    if (requestId && !(job.queued_request_ids ?? []).includes(requestId) && requestId !== job.request_id) throw new Error("stale request cancellation");
+    if (requestId && (job.queued_request_ids ?? []).includes(requestId)) {
+      job.queued_request_ids = job.queued_request_ids!.filter((id) => id !== requestId);
+      job.queue_length = job.queued_request_ids.length;
+      emit();
+      return { ...job };
+    }
     if (turnId && turnId !== job.active_turn_id) throw new Error("stale turn cancellation");
     job.state = "needs_input";
     job.last_action = "Turn cancelled";

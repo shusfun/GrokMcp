@@ -35,6 +35,7 @@ type Agent interface {
 	LoadConnectedSession(ctx context.Context, sessionID, cwd string) error
 	InvalidateSession(sessionID string)
 	PlanSession(ctx context.Context, sessionID string) error
+	EnsureExecMode(ctx context.Context, sessionID string) error
 	Prompt(ctx context.Context, sessionID, text string) (PromptResult, error)
 	Cancel(ctx context.Context, sessionID string) error
 	PendingApproval(id string) (PlanRequest, error)
