@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"io"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +15,12 @@ import (
 )
 
 func TestStdioColdStartAndSameServerHostRestart(t *testing.T) {
-	home := t.TempDir()
+	// macOS Unix socket 路径上限约 104 字节。t.TempDir 会带上完整测试名，CI 上会 bind EINVAL。
+	home, err := os.MkdirTemp("", "gs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	var mu sync.Mutex
