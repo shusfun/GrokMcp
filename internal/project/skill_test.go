@@ -13,7 +13,9 @@ func TestRepoSkillMatchesManagedBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(b) != ManagedBody() {
+	got := strings.ReplaceAll(string(b), "\r\n", "\n")
+	want := strings.ReplaceAll(ManagedBody(), "\r\n", "\n")
+	if got != want {
 		t.Fatalf("managed skill file drifted from SkillVersion %s", SkillVersion)
 	}
 }

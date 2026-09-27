@@ -45,7 +45,7 @@ func TestStdioProcessColdStartAndHostRestart(t *testing.T) {
 		t.Fatalf("cold start: %v", err)
 	}
 	mcpPID := uint32(cmd.Process.Pid)
-	desktop := waitOtherPID(exe, mcpPID, 15*time.Second)
+	desktop := waitDesktopPID(exe, mcpPID, 15*time.Second)
 	if desktop == 0 {
 		t.Fatal("cold start did not launch a supervisor desktop")
 	}
@@ -58,17 +58,45 @@ func TestStdioProcessColdStartAndHostRestart(t *testing.T) {
 	}
 }
 
-func waitOtherPID(exe string, self uint32, d time.Duration) uint32 {
+func waitDesktopPID(exe string, parent uint32, d time.Duration) uint32 {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
+		for _, pid := range childPIDs(parent) {
+			if pid != parent {
+				return pid
+			}
+		}
 		for _, pid := range pidsForExe(exe) {
-			if pid != self {
+			if pid != parent {
 				return pid
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	return 0
+}
+
+func childPIDs(parent uint32) []uint32 {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer windows.CloseHandle(snap)
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	if err := windows.Process32First(snap, &entry); err != nil {
+		return nil
+	}
+	var out []uint32
+	for {
+		if entry.ParentProcessID == parent && entry.ProcessID != parent {
+			out = append(out, entry.ProcessID)
+		}
+		if err := windows.Process32Next(snap, &entry); err != nil {
+			break
+		}
+	}
+	return out
 }
 
 func processAlive(pid uint32) bool {
@@ -122,5 +150,19 @@ func processPath(pid uint32) (string, error) {
 }
 
 func samePath(a, b string) bool {
-	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	return strings.EqualFold(longPath(a), longPath(b))
+}
+
+func longPath(p string) string {
+	p = strings.TrimPrefix(p, `\\?\`)
+	src, err := windows.UTF16PtrFromString(p)
+	if err != nil {
+		return filepath.Clean(p)
+	}
+	buf := make([]uint16, 1024)
+	n, err := windows.GetLongPathName(src, &buf[0], uint32(len(buf)))
+	if err != nil || n == 0 || n > uint32(len(buf)) {
+		return filepath.Clean(p)
+	}
+	return filepath.Clean(windows.UTF16ToString(buf[:n]))
 }
