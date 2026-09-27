@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"grokmcp/internal/ipc"
+
 	"grokmcp/internal/core"
 	"grokmcp/internal/integration"
 	"grokmcp/internal/paths"
@@ -26,11 +28,20 @@ type ConnectOptions struct {
 }
 
 func Connect(ctx context.Context, opts ConnectOptions) (core.Backend, func(), error) {
+	cl, err := connectClient(ctx, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	backend, cleanup := finishClient(cl, opts)
+	return backend, cleanup, nil
+}
+
+func connectClient(ctx context.Context, opts ConnectOptions) (*ipc.Client, error) {
 	if opts.Home != "" {
 		_ = os.Setenv("GROK_SUPERVISOR_HOME", opts.Home)
 	}
 	if cl := tryDial(ctx); cl != nil {
-		return cl, func() { _ = cl.Close() }, nil
+		return cl, nil
 	}
 
 	exe, exeErr := MCPExecutable()
@@ -39,7 +50,7 @@ func Connect(ctx context.Context, opts ConnectOptions) (core.Backend, func(), er
 	}
 
 	if opts.DisableStart {
-		return nil, nil, fmt.Errorf("Grok Supervisor is not running (executable %s). Start Grok Supervisor and retry", exe)
+		return nil, fmt.Errorf("Grok Supervisor is not running (executable %s). Start Grok Supervisor and retry", exe)
 	}
 
 	start := opts.Starter
@@ -55,29 +66,29 @@ func Connect(ctx context.Context, opts ConnectOptions) (core.Backend, func(), er
 	spawned := false
 	for {
 		if cl := tryDial(ctx); cl != nil {
-			return cl, func() { _ = cl.Close() }, nil
+			return cl, nil
 		}
 		if !spawned && !ownerLocked() {
 			slock, err := tryStartLock()
 			if err == nil {
 				if cl := tryDial(ctx); cl != nil {
 					_ = slock.Close()
-					return cl, func() { _ = cl.Close() }, nil
+					return cl, nil
 				}
 				if !ownerLocked() {
 					if err := start(); err != nil {
 						_ = slock.Close()
-						return nil, nil, fmt.Errorf("start Grok Supervisor (%s desktop): %w", exe, err)
+						return nil, fmt.Errorf("start Grok Supervisor (%s desktop): %w", exe, err)
 					}
 					spawned = true
 					for {
 						if cl := tryDial(ctx); cl != nil {
 							_ = slock.Close()
-							return cl, func() { _ = cl.Close() }, nil
+							return cl, nil
 						}
 						if err := waitConnect(ctx, deadline, &backoff); err != nil {
 							_ = slock.Close()
-							return nil, nil, connectWaitErr(exe, true, err)
+							return nil, connectWaitErr(exe, true, err)
 						}
 					}
 				}
@@ -85,16 +96,29 @@ func Connect(ctx context.Context, opts ConnectOptions) (core.Backend, func(), er
 			}
 		}
 		if err := waitConnect(ctx, deadline, &backoff); err != nil {
-			return nil, nil, connectWaitErr(exe, spawned, err)
+			return nil, connectWaitErr(exe, spawned, err)
 		}
 	}
 }
 
 func connectWaitErr(exe string, spawned bool, err error) error {
+	var base error
 	if spawned {
-		return fmt.Errorf("Grok Supervisor did not become ready after starting %s desktop: %w; open Grok Supervisor and retry", exe, err)
+		base = fmt.Errorf("Grok Supervisor did not become ready after starting %s desktop: %w; open Grok Supervisor and retry", exe, err)
+	} else {
+		base = fmt.Errorf("Grok Supervisor did not become ready (executable %s): %w; open Grok Supervisor and retry", exe, err)
 	}
-	return fmt.Errorf("Grok Supervisor did not become ready (executable %s): %w; open Grok Supervisor and retry", exe, err)
+	if goruntime.GOOS == "windows" && ownerLocked() {
+		return fmt.Errorf("%w; named pipe is unavailable while the supervisor lock is held. If an older TCP build is still running, quit it. This version does not fall back to TCP", base)
+	}
+	return base
+}
+
+func finishClient(cl *ipc.Client, opts ConnectOptions) (core.Backend, func()) {
+	r := newResilient(cl, func(ctx context.Context) (*ipc.Client, error) {
+		return connectClient(ctx, opts)
+	})
+	return r, func() { _ = r.Close() }
 }
 
 func waitConnect(ctx context.Context, deadline time.Time, backoff *time.Duration) error {

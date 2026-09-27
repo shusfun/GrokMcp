@@ -3,12 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
-	"path/filepath"
-	goruntime "runtime"
-	"strconv"
-	"strings"
 	"time"
 
 	"grokmcp/internal/agent"
@@ -43,13 +38,15 @@ func Open(ctx context.Context, opts Options) (core.Backend, func(), error) {
 	}
 	for {
 		if cl := tryDial(ctx); cl != nil {
-			return cl, func() { _ = cl.Close() }, nil
+			backend, cleanup := finishDialClient(cl)
+			return backend, cleanup, nil
 		}
 		lock, err := tryLockFile(lockPath)
 		if err == nil {
 			if cl := tryDial(ctx); cl != nil {
 				_ = lock.Close()
-				return cl, func() { _ = cl.Close() }, nil
+				backend, cleanup := finishDialClient(cl)
+				return backend, cleanup, nil
 			}
 			return openHost(ctx, opts, lock)
 		}
@@ -146,46 +143,4 @@ func tryDial(ctx context.Context) *ipc.Client {
 		return nil
 	}
 	return cl
-}
-
-func listenIPC() (net.Listener, error) {
-	p, err := paths.SocketPath()
-	if err != nil {
-		return nil, err
-	}
-	if goruntime.GOOS == "windows" {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return nil, err
-		}
-		addr := ln.Addr().(*net.TCPAddr)
-		if err := os.WriteFile(p, []byte(strconv.Itoa(addr.Port)), 0o600); err != nil {
-			_ = ln.Close()
-			return nil, err
-		}
-		return ln, nil
-	}
-	_ = os.MkdirAll(filepath.Dir(p), 0o700)
-	ln, err := net.Listen("unix", p)
-	if err != nil {
-		_ = os.Remove(p)
-		return net.Listen("unix", p)
-	}
-	return ln, nil
-}
-
-func dialIPC(ctx context.Context) (*ipc.Client, error) {
-	p, err := paths.SocketPath()
-	if err != nil {
-		return nil, err
-	}
-	if goruntime.GOOS == "windows" {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return nil, err
-		}
-		port := strings.TrimSpace(string(b))
-		return ipc.Dial(ctx, "tcp", "127.0.0.1:"+port)
-	}
-	return ipc.Dial(ctx, "unix", p)
 }

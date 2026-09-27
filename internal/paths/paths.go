@@ -48,15 +48,9 @@ func DBPath() (string, error) {
 	return filepath.Join(dir, "supervisor.db"), nil
 }
 
+// SocketPath 现在等同于 IPCAddress。Windows 不再返回 ipc.port。
 func SocketPath() (string, error) {
-	dir, err := AppDir()
-	if err != nil {
-		return "", err
-	}
-	if runtime.GOOS == "windows" {
-		return filepath.Join(dir, "ipc.port"), nil
-	}
-	return filepath.Join(dir, "supervisor.sock"), nil
+	return IPCAddress()
 }
 
 func LockPath() (string, error) {

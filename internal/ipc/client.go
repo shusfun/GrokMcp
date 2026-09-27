@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"grokmcp/internal/protocol"
 )
@@ -30,10 +31,23 @@ func Dial(ctx context.Context, network, addr string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	return New(c), nil
+}
+
+func New(c net.Conn) *Client {
 	cl := &Client{conn: c, subs: map[int]func(protocol.Event){}, done: make(chan struct{}), events: make(chan protocol.Event, 64)}
 	go cl.dispatchEvents()
 	go cl.read()
-	return cl, nil
+	return cl
+}
+
+func (c *Client) Alive() bool {
+	select {
+	case <-c.done:
+		return false
+	default:
+		return c.conn != nil
+	}
 }
 
 func (c *Client) read() {
@@ -62,6 +76,25 @@ func (c *Client) read() {
 }
 
 func (c *Client) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	raw, sent, err := c.invokeOnce(ctx, method, params)
+	if err != nil && sent && !IsUncertain(err) {
+		// sent 不能在这里丢掉。已写出但未确认的取消/超时也是不确定结果。
+		return nil, errors.Join(ErrResultUncertain, err)
+	}
+	return raw, err
+}
+
+func (c *Client) invokeOnce(ctx context.Context, method string, params any) (json.RawMessage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	select {
+	case <-c.done:
+		return nil, false, ErrDisconnected
+	case <-ctx.Done():
+		return nil, false, ctx.Err()
+	default:
+	}
 	id := c.id.Add(1)
 	b, _ := json.Marshal(params)
 	req := Request{ID: id, Method: method, Params: b}
@@ -70,22 +103,42 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 	c.pend.Store(id, ch)
 	defer c.pend.Delete(id)
 	c.wmu.Lock()
-	_, err := c.conn.Write(append(raw, '\n'))
-	c.wmu.Unlock()
-	if err != nil {
-		return nil, err
+	if err := ctx.Err(); err != nil {
+		c.wmu.Unlock()
+		return nil, false, err
 	}
 	select {
 	case <-c.done:
-		return nil, errors.New("IPC disconnected")
+		c.wmu.Unlock()
+		return nil, false, ErrDisconnected
+	default:
+	}
+	conn := c.conn
+	var err error
+	if conn == nil {
+		err = ErrDisconnected
+	} else {
+		_, err = conn.Write(append(raw, '\n'))
+	}
+	c.wmu.Unlock()
+	if err != nil {
+		if IsDisconnected(err) {
+			return nil, false, err
+		}
+		// 写失败时对端可能已经收到。有副作用的调用不能重放。
+		return nil, true, errors.Join(ErrResultUncertain, err)
+	}
+	select {
+	case <-c.done:
+		return nil, true, errors.Join(ErrResultUncertain, ErrDisconnected)
 	case <-ctx.Done():
 		c.pend.Delete(id)
-		return nil, ctx.Err()
+		return nil, true, errors.Join(ErrResultUncertain, ctx.Err())
 	case resp := <-ch:
 		if resp.Error != "" {
-			return nil, errors.New(resp.Error)
+			return nil, true, errors.New(resp.Error)
 		}
-		return resp.Result, nil
+		return resp.Result, true, nil
 	}
 }
 
@@ -260,7 +313,14 @@ func (c *Client) Subscribe(fn func(protocol.Event)) func() {
 	}
 }
 func (c *Client) SetMCPConnected(v bool) {
-	_, _ = c.call(context.Background(), "setMCP", map[string]bool{"live": v})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = c.SetMCPConnectedContext(ctx, v)
+}
+
+func (c *Client) SetMCPConnectedContext(ctx context.Context, v bool) error {
+	_, err := c.call(ctx, "setMCP", map[string]bool{"live": v})
+	return err
 }
 
 func (c *Client) Close() error { return c.conn.Close() }

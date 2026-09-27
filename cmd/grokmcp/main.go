@@ -52,6 +52,9 @@ func main() {
 		fmt.Printf("executable\t%s\n", exe)
 		fmt.Printf("mcp_command\t%s mcp\n", exe)
 		fmt.Printf("supervisor_ipc\t%v\n", appruntime.Probe(ctx))
+		if addr, err := appruntime.IPCAddress(); err == nil {
+			fmt.Printf("supervisor_ipc_addr\t%s\n", addr)
+		}
 		finder := grokbin.New()
 		d := finder.Diagnose(ctx, "")
 		g := agent.NewGrok(d.GrokPath, finder)

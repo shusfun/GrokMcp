@@ -90,6 +90,13 @@ func (s *Server) handle(c net.Conn) {
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	state := &connLive{}
+	ctx = context.WithValue(ctx, connLiveKey{}, state)
+	defer state.close(func() {
+		if ls, ok := s.svc.(interface{ SetMCPConnected(bool) }); ok {
+			ls.SetMCPConnected(false)
+		}
+	})
 	for sc.Scan() {
 		var req Request
 		if err := json.Unmarshal(sc.Bytes(), &req); err != nil {
@@ -379,8 +386,12 @@ func (s *Server) dispatch(ctx context.Context, req Request) (json.RawMessage, er
 			Live bool `json:"live"`
 		}
 		_ = json.Unmarshal(req.Params, &in)
-		if ls, ok := s.svc.(interface{ SetMCPConnected(bool) }); ok {
-			ls.SetMCPConnected(in.Live)
+		if state, ok := ctx.Value(connLiveKey{}).(*connLive); ok {
+			state.set(in.Live, func(live bool) {
+				if ls, ok := s.svc.(interface{ SetMCPConnected(bool) }); ok {
+					ls.SetMCPConnected(live)
+				}
+			})
 		}
 		return marshal(struct{}{}, nil)
 	default:
@@ -394,6 +405,36 @@ func marshal(v any, err error) (json.RawMessage, error) {
 	}
 	b, err := json.Marshal(v)
 	return b, err
+}
+
+type connLiveKey struct{}
+
+type connLive struct {
+	mu     sync.Mutex
+	live   bool
+	closed bool
+}
+
+// set 与 close 共用一把锁，连接关闭后的迟到 setMCP 不能再增加计数。
+func (st *connLive) set(live bool, apply func(bool)) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.closed || st.live == live {
+		return
+	}
+	st.live = live
+	apply(live)
+}
+
+func (st *connLive) close(apply func()) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.closed = true
+	if !st.live {
+		return
+	}
+	st.live = false
+	apply()
 }
 
 func mustJSON(v any) json.RawMessage {

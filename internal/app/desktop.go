@@ -2,8 +2,12 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -12,17 +16,37 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 	"grokmcp/internal/core"
 	"grokmcp/internal/notify"
+	"grokmcp/internal/paths"
 	"grokmcp/internal/protocol"
 	"grokmcp/internal/trace"
 	"grokmcp/internal/version"
 	"grokmcp/internal/web"
 )
 
+func desktopInstanceID() string {
+	dir, err := paths.AppDir()
+	if err != nil {
+		return "grokmcp.supervisor.desktop"
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(filepath.Clean(dir))))
+	return "grokmcp.supervisor.desktop." + hex.EncodeToString(sum[:8])
+}
+
 func Run(backend core.Backend) error {
 	svc := &Service{Backend: backend}
+	var window *application.WebviewWindow
 	app := application.New(application.Options{
 		Name:        "Grok Supervisor",
 		Description: "Codex orchestration · Grok execution",
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: desktopInstanceID(),
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+				if window != nil {
+					window.Show()
+					window.Focus()
+				}
+			},
+		},
 		Services: []application.Service{
 			application.NewService(svc),
 		},
@@ -70,7 +94,7 @@ func Run(backend core.Backend) error {
 		winOpts.MaximiseButtonState = application.ButtonHidden
 		winOpts.CloseButtonState = application.ButtonHidden
 	}
-	window := app.Window.NewWithOptions(winOpts)
+	window = app.Window.NewWithOptions(winOpts)
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 		window.Hide()
 		e.Cancel()

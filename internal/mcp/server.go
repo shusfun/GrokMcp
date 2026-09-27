@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"grokmcp/internal/core"
@@ -11,19 +12,35 @@ import (
 )
 
 func Run(ctx context.Context, backend core.Backend) error {
-	if ls, ok := backend.(interface{ SetMCPConnected(bool) }); ok {
-		ls.SetMCPConnected(true)
-		defer ls.SetMCPConnected(false)
-	}
+	setMCP(ctx, backend, true)
+	defer func() {
+		// stdio 已经结束时仍给断开通知一个上界，避免 Background 永久等待。
+		stop, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		setMCP(stop, backend, false)
+	}()
 	server := newServer(backend)
 	return server.Run(ctx, &mcp.StdioTransport{})
+}
+
+func setMCP(ctx context.Context, backend core.Backend, live bool) {
+	if ls, ok := backend.(interface {
+		SetMCPConnectedContext(context.Context, bool) error
+	}); ok {
+		_ = ls.SetMCPConnectedContext(ctx, live)
+		return
+	}
+	if ls, ok := backend.(interface{ SetMCPConnected(bool) }); ok {
+		ls.SetMCPConnected(live)
+	}
 }
 
 const instructions = `可委派工作默认交给 Grok。是否进入 Plan 由调用方用 planning=required 显式选择，未填写则 skip。Codex 只在调用方要求规划时审计划，并验收结果。
 用 grok_wait 等待关键边界，默认 300 秒。boundary 才处理审批、输入、失败或验收。report_due 是内部保活，不要向用户发送进度消息，携带返回 cursors 继续等待。不要用 followup 催进度，不读取过程流；停止等待不会取消任务。
 TUI 查看与 Codex 请求共享同一 session。TUI 活跃时追加请求会立即返回 request_id 并排队，不要写入 TUI 输入，不要另开 session。
 断连或 Codex 重启后继续原来的 Grok session，不要创建替换会话。
-不要修改用户的模型或推理设置。`
+不要修改用户的模型或推理设置。
+若返回「IPC 结果不确定」，按 job_id 或 request_id 查询，不要重发 dispatch、followup 或审批。等待中断后携带原来的 cursors 继续 grok_wait。Codex 已关闭的 stdio 只能由 Codex 重新启动 MCP 进程，本进程不能修复那条管道。`
 
 func newServer(backend core.Backend) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "grok_supervisor", Version: version.Version}, &mcp.ServerOptions{Instructions: instructions})

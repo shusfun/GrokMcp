@@ -1,4 +1,4 @@
-<!-- grok-supervisor-tools managed version=3 -->
+<!-- grok-supervisor-tools managed version=4 -->
 
 # Grok Supervisor 工具说明
 
@@ -11,6 +11,7 @@
 - Codex 审计划和验收。
 - 用 `grok_wait` 等待边界状态，不要读取或等待过程流。
 - 断连后继续原来的 Grok session，不要创建替换会话。
+- 若工具返回「IPC 结果不确定」，按 job_id 或 request_id 查询，不要重发 dispatch、followup 或审批。grok_wait 中断后携带原来的 cursors 再等。Codex 已关闭的 stdio 需要在 Codex 里重新连接 MCP，不能靠旧进程自己修好。
 
 ## 工具
 

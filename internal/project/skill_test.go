@@ -7,6 +7,46 @@ import (
 	"testing"
 )
 
+func TestRepoSkillMatchesManagedBody(t *testing.T) {
+	root := filepath.Join("..", "..")
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(SkillRel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != ManagedBody() {
+		t.Fatalf("managed skill file drifted from SkillVersion %s", SkillVersion)
+	}
+}
+
+func TestOutdatedManagedSkillCanUpdate(t *testing.T) {
+	root := t.TempDir()
+	p := SkillPath(root)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := []byte(Marker("3") + "\n# old managed\n")
+	if err := os.WriteFile(p, old, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	user := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(user, []byte("# user\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if st := Probe(root); st.SkillStatus != "outdated" || st.SkillVersion != "3" {
+		t.Fatalf("%+v", st)
+	}
+	if err := Update(root); err != nil {
+		t.Fatal(err)
+	}
+	if st := Probe(root); st.SkillStatus != "installed" || st.SkillVersion != SkillVersion {
+		t.Fatalf("%+v", st)
+	}
+	got, _ := os.ReadFile(user)
+	if string(got) != "# user\n" {
+		t.Fatalf("user file changed: %q", got)
+	}
+}
+
 func TestSkillInstallUpdateRemoveIdempotent(t *testing.T) {
 	root := t.TempDir()
 	if st := Probe(root); st.SkillStatus != "missing" {
