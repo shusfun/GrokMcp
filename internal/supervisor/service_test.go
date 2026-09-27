@@ -378,7 +378,8 @@ func TestWaitAnyBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Jobs) == 0 || !got.Jobs[0].State.IsBoundary() {
+	// any 模式按请求顺序返回 Jobs，先完成的边界不一定在 Jobs[0]。
+	if got.Reason != "boundary" || len(got.Boundaries) == 0 || !got.Boundaries[0].State.IsBoundary() {
 		t.Fatalf("%+v", got)
 	}
 }
