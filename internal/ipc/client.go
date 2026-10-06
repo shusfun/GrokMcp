@@ -114,19 +114,17 @@ func (c *Client) invokeOnce(ctx context.Context, method string, params any) (jso
 	default:
 	}
 	conn := c.conn
+	var n int
 	var err error
 	if conn == nil {
 		err = ErrDisconnected
 	} else {
-		_, err = conn.Write(append(raw, '\n'))
+		n, err = conn.Write(append(raw, '\n'))
 	}
 	c.wmu.Unlock()
 	if err != nil {
-		if IsDisconnected(err) {
-			return nil, false, err
-		}
-		// 写失败时对端可能已经收到。有副作用的调用不能重放。
-		return nil, true, errors.Join(ErrResultUncertain, err)
+		sent, err := classifyWrite(n, err)
+		return nil, sent, err
 	}
 	select {
 	case <-c.done:

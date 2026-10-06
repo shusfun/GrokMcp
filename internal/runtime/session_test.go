@@ -119,6 +119,51 @@ func TestEffectCallIsNotReplayed(t *testing.T) {
 	}
 }
 
+func TestZeroByteDisconnectRedialsEffectOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first := ipc.New(newWriteScriptConn(0, net.ErrClosed))
+	t.Cleanup(func() { _ = first.Close() })
+	var dials atomic.Int32
+	var calls atomic.Int32
+	r := newResilient(first, func(context.Context) (*ipc.Client, error) {
+		dials.Add(1)
+		return scriptedClient(t, func(ipc.Request) bool {
+			calls.Add(1)
+			return true
+		}), nil
+	})
+	_, err := r.Dispatch(ctx, protocol.DispatchRequest{Tasks: []protocol.DispatchTask{{Title: "once"}}})
+	if err != nil {
+		t.Fatalf("retry dispatch: %v", err)
+	}
+	if dials.Load() != 1 {
+		t.Fatalf("dials = %d, want 1", dials.Load())
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("dispatch calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestPartialWriteDisconnectDoesNotReplayEffect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first := ipc.New(newWriteScriptConn(4, net.ErrClosed))
+	t.Cleanup(func() { _ = first.Close() })
+	var dials atomic.Int32
+	r := newResilient(first, func(context.Context) (*ipc.Client, error) {
+		dials.Add(1)
+		return scriptedClient(t, func(ipc.Request) bool { return true }), nil
+	})
+	_, err := r.Dispatch(ctx, protocol.DispatchRequest{Tasks: []protocol.DispatchTask{{Title: "once"}}})
+	if !ipc.IsUncertain(err) || ipc.IsDisconnected(err) {
+		t.Fatalf("err = %v, want uncertain", err)
+	}
+	if dials.Load() != 0 {
+		t.Fatalf("redial during partial write = %d, want 0", dials.Load())
+	}
+}
+
 func scriptedClient(t *testing.T, handle func(ipc.Request) bool) *ipc.Client {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -157,6 +202,47 @@ func scriptedClient(t *testing.T, handle func(ipc.Request) bool) *ipc.Client {
 	}()
 	return cl
 }
+
+type stubAddr struct{}
+
+func (stubAddr) Network() string { return "stub" }
+func (stubAddr) String() string  { return "stub" }
+
+type writeScriptConn struct {
+	n      int
+	err    error
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newWriteScriptConn(n int, err error) *writeScriptConn {
+	return &writeScriptConn{n: n, err: err, closed: make(chan struct{})}
+}
+
+func (c *writeScriptConn) Read([]byte) (int, error) {
+	<-c.closed
+	return 0, net.ErrClosed
+}
+
+func (c *writeScriptConn) Write([]byte) (int, error) {
+	select {
+	case <-c.closed:
+		return 0, net.ErrClosed
+	default:
+		return c.n, c.err
+	}
+}
+
+func (c *writeScriptConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *writeScriptConn) LocalAddr() net.Addr              { return stubAddr{} }
+func (c *writeScriptConn) RemoteAddr() net.Addr             { return stubAddr{} }
+func (c *writeScriptConn) SetDeadline(time.Time) error      { return nil }
+func (c *writeScriptConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *writeScriptConn) SetWriteDeadline(time.Time) error { return nil }
 
 func TestWaitCursorSurvivesHostRestartWithoutNewJob(t *testing.T) {
 	home := testHome(t)
