@@ -41,6 +41,26 @@ func TestDesktopSecondLaunchAndMCPClients(t *testing.T) {
 		t.Fatal("window stayed visible after hide")
 	}
 
+	background := exec.Command(exe, "desktop", "--background")
+	background.Env = append(os.Environ(), "GROK_SUPERVISOR_HOME="+home)
+	if err := background.Start(); err != nil {
+		t.Fatal(err)
+	}
+	bgDone := make(chan error, 1)
+	go func() { bgDone <- background.Wait() }()
+	select {
+	case err := <-bgDone:
+		if err != nil {
+			t.Fatalf("background desktop exit: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		killTree(background.Process.Pid)
+		t.Fatal("background desktop did not exit")
+	}
+	if waitVisible(uint32(first.Process.Pid), 500*time.Millisecond) {
+		t.Fatal("background relaunch activated the hidden window")
+	}
+
 	second := exec.Command(exe)
 	second.Env = append(os.Environ(), "GROK_SUPERVISOR_HOME="+home)
 	if err := second.Start(); err != nil {

@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -13,15 +15,17 @@ import (
 // resilient 在同一个 MCP stdio 进程内重拨 Supervisor。
 // Codex 已经关闭的 stdio transport 无法在本进程内修复，那是宿主边界。
 type resilient struct {
-	mu      sync.Mutex
-	cl      *ipc.Client
-	dial    func(context.Context) (*ipc.Client, error)
-	subs    map[int]func(protocol.Event)
-	unsubs  map[int]func()
-	seq     int
-	mcpLive bool
-	closed  bool
-	dialing chan struct{}
+	mu          sync.Mutex
+	cl          *ipc.Client
+	dial        func(context.Context) (*ipc.Client, error)
+	subs        map[int]func(protocol.Event)
+	unsubs      map[int]func()
+	seq         int
+	mcpLive     bool
+	mcpGen      uint64
+	lastDialErr error
+	closed      bool
+	dialing     chan struct{}
 }
 
 func newResilient(cl *ipc.Client, dial func(context.Context) (*ipc.Client, error)) *resilient {
@@ -96,13 +100,13 @@ func (r *resilient) ready(ctx context.Context) (*ipc.Client, error) {
 		r.dialing = nil
 		close(ch)
 		r.mu.Unlock()
-		if live && cl != nil {
-			if err := cl.SetMCPConnectedContext(ctx, true); err != nil && ctx.Err() != nil {
-				return nil, err
-			}
-		}
 		if err != nil {
 			return nil, err
+		}
+		if live && cl != nil {
+			if notifyErr := r.notifyConnectedIfCurrent(ctx, cl); notifyErr != nil && ctx.Err() != nil {
+				return nil, notifyErr
+			}
 		}
 		if cl == nil {
 			return nil, ipc.ErrDisconnected
@@ -191,12 +195,64 @@ func (r *resilient) SetMCPConnected(v bool) {
 func (r *resilient) SetMCPConnectedContext(ctx context.Context, v bool) error {
 	r.mu.Lock()
 	r.mcpLive = v
+	r.mcpGen++
 	cl := r.cl
+	alive := cl != nil && cl.Alive()
 	r.mu.Unlock()
-	if cl == nil || !cl.Alive() {
+	if alive {
+		return r.notifyConnectedIfCurrent(ctx, cl)
+	}
+	if !v {
 		return nil
 	}
-	return cl.SetMCPConnectedContext(ctx, v)
+	// 拨号完成后再按当时的世代通知。断开会推进世代，避免迟到的已连接通知。
+	go func() {
+		cl, err := r.ready(ctx)
+		if err != nil || cl == nil {
+			if err != nil {
+				r.noteDialError(err)
+			}
+			return
+		}
+		if err := r.notifyConnectedIfCurrent(ctx, cl); err != nil {
+			r.noteDialError(err)
+		}
+	}()
+	return nil
+}
+
+func (r *resilient) notifyConnectedIfCurrent(ctx context.Context, cl *ipc.Client) error {
+	r.mu.Lock()
+	if r.closed || r.cl != cl || !r.mcpLive {
+		r.mu.Unlock()
+		return nil
+	}
+	gen := r.mcpGen
+	r.mu.Unlock()
+	r.mu.Lock()
+	if r.closed || r.cl != cl || !r.mcpLive || r.mcpGen != gen {
+		r.mu.Unlock()
+		return nil
+	}
+	r.mu.Unlock()
+	return cl.SetMCPConnectedContext(ctx, true)
+}
+
+func (r *resilient) noteDialError(err error) {
+	if err == nil {
+		return
+	}
+	r.mu.Lock()
+	r.lastDialErr = err
+	r.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "grok supervisor background dial: %v\n", err)
+}
+
+// LastDialError 返回最近一次被后台路径观察到的拨号或连接通知错误。
+func (r *resilient) LastDialError() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastDialErr
 }
 
 func (r *resilient) Dispatch(ctx context.Context, req protocol.DispatchRequest) (protocol.DispatchResult, error) {

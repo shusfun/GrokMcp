@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -31,9 +32,13 @@ func TestStdioProcessColdStartAndHostRestart(t *testing.T) {
 	cmd := exec.Command(exe, "mcp")
 	cmd.Env = append(os.Environ(), "GROK_SUPERVISOR_HOME="+home)
 	client := sdk.NewClient(&sdk.Implementation{Name: "stdio-process", Version: "test"}, nil)
+	started := time.Now()
 	session, err := client.Connect(ctx, &sdk.CommandTransport{Command: cmd}, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("initialize took %s; MCP must answer before the desktop window is ready", elapsed)
 	}
 	t.Cleanup(func() {
 		_ = session.Close()
@@ -49,6 +54,19 @@ func TestStdioProcessColdStartAndHostRestart(t *testing.T) {
 	if desktop == 0 {
 		t.Fatal("cold start did not launch a supervisor desktop")
 	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if title := visibleTitleFor(mcpPID); title != "" {
+			t.Fatalf("mcp process showed window %q", title)
+		}
+		if title := visibleTitleFor(desktop); title != "" {
+			t.Fatalf("background desktop showed window %q", title)
+		}
+		if fg := foregroundPID(); fg == mcpPID || fg == desktop {
+			t.Fatalf("foreground stolen by pid %d", fg)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	_ = exec.Command("taskkill", "/PID", strconv.FormatUint(uint64(desktop), 10), "/T", "/F").Run()
 	if _, err := session.CallTool(ctx, &sdk.CallToolParams{Name: "grok_project_list", Arguments: map[string]any{}}); err != nil {
 		t.Fatalf("same stdio process after host restart: %v", err)
@@ -56,6 +74,40 @@ func TestStdioProcessColdStartAndHostRestart(t *testing.T) {
 	if !processAlive(mcpPID) {
 		t.Fatal("stdio process exited during host restart")
 	}
+}
+
+func foregroundPID() uint32 {
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	fg, _, _ := user32.NewProc("GetForegroundWindow").Call()
+	if fg == 0 {
+		return 0
+	}
+	var id uint32
+	user32.NewProc("GetWindowThreadProcessId").Call(fg, uintptr(unsafe.Pointer(&id)))
+	return id
+}
+
+func visibleTitleFor(pid uint32) string {
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	isVisible := user32.NewProc("IsWindowVisible")
+	getText := user32.NewProc("GetWindowTextW")
+	getPID := user32.NewProc("GetWindowThreadProcessId")
+	found := ""
+	callback := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+		var id uint32
+		getPID.Call(hwnd, uintptr(unsafe.Pointer(&id)))
+		vis, _, _ := isVisible.Call(hwnd)
+		if id == pid && vis != 0 {
+			buf := make([]uint16, 256)
+			n, _, _ := getText.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+			if n > 0 {
+				found = windows.UTF16ToString(buf)
+			}
+		}
+		return 1
+	})
+	_ = windows.EnumWindows(callback, nil)
+	return found
 }
 
 func waitDesktopPID(exe string, parent uint32, d time.Duration) uint32 {

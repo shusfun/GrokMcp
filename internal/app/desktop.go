@@ -32,7 +32,26 @@ func desktopInstanceID() string {
 	return "grokmcp.supervisor.desktop." + hex.EncodeToString(sum[:8])
 }
 
-func Run(backend core.Backend) error {
+// BackgroundArg 只用于 MCP 冷启动拉起的桌面。它不能显示或激活窗口。
+const BackgroundArg = "--background"
+
+// RunOptions 控制桌面进程是用户打开，还是后台保活。
+type RunOptions struct {
+	Background bool
+}
+
+// ActivateOnSecondInstance 判断第二次启动应不应该把已有窗口拿到前台。
+// 带 BackgroundArg 的启动来自 MCP，不能抢聊天窗口焦点。
+func ActivateOnSecondInstance(args []string) bool {
+	for _, arg := range args {
+		if arg == BackgroundArg {
+			return false
+		}
+	}
+	return true
+}
+
+func Run(backend core.Backend, opts RunOptions) error {
 	svc := &Service{Backend: backend}
 	var window *application.WebviewWindow
 	app := application.New(application.Options{
@@ -40,11 +59,12 @@ func Run(backend core.Backend) error {
 		Description: "Codex orchestration · Grok execution",
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: desktopInstanceID(),
-			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
-				if window != nil {
-					window.Show()
-					window.Focus()
+			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
+				if window == nil || !ActivateOnSecondInstance(data.Args) {
+					return
 				}
+				window.Show()
+				window.Focus()
 			},
 		},
 		Services: []application.Service{
@@ -93,6 +113,10 @@ func Run(backend core.Backend) error {
 		winOpts.MinimiseButtonState = application.ButtonHidden
 		winOpts.MaximiseButtonState = application.ButtonHidden
 		winOpts.CloseButtonState = application.ButtonHidden
+	}
+	// 后台实例从创建起就不带 WS_VISIBLE，避免 MCP 冷启动抢前台。
+	if opts.Background {
+		winOpts.Hidden = true
 	}
 	window = app.Window.NewWithOptions(winOpts)
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {

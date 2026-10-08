@@ -28,6 +28,29 @@ func testHome(t *testing.T) string {
 	return dir
 }
 
+func TestAttachReturnsBeforeSupervisor(t *testing.T) {
+	home := testHome(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	started := time.Now()
+	backend, cleanup, err := Attach(ctx, ConnectOptions{Home: home, DisableStart: true, Timeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	if time.Since(started) > time.Second {
+		t.Fatalf("Attach blocked for %s", time.Since(started))
+	}
+	_, hostCleanup, err := Open(ctx, Options{Home: home, Agent: agent.NewFake(), Term: terminal.NewFake()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(hostCleanup)
+	if _, err := backend.ListJobs(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestConnectDoesNotBecomeHost(t *testing.T) {
 	home := testHome(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -179,8 +202,8 @@ func TestDesktopCommandIsolatesStdio(t *testing.T) {
 	if cmd.Stdin != nil || cmd.Stdout != nil || cmd.Stderr != nil {
 		t.Fatal("desktop command must not inherit MCP stdio")
 	}
-	if len(cmd.Args) != 2 || cmd.Args[1] != "desktop" {
-		t.Fatalf("args = %v, want [exe desktop]", cmd.Args)
+	if len(cmd.Args) != 3 || cmd.Args[1] != "desktop" || cmd.Args[2] != "--background" {
+		t.Fatalf("args = %v, want [exe desktop --background]", cmd.Args)
 	}
 	if cmd.SysProcAttr == nil {
 		t.Fatal("missing detach SysProcAttr")

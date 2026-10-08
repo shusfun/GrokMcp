@@ -36,6 +36,23 @@ func Connect(ctx context.Context, opts ConnectOptions) (core.Backend, func(), er
 	return backend, cleanup, nil
 }
 
+// Attach 立刻返回，并在后台拨号或启动隐藏桌面。
+// MCP stdio 必须先回答 initialize，不能等窗口创建。
+func Attach(ctx context.Context, opts ConnectOptions) (core.Backend, func(), error) {
+	if opts.Home != "" {
+		_ = os.Setenv("GROK_SUPERVISOR_HOME", opts.Home)
+	}
+	r := newResilient(nil, func(ctx context.Context) (*ipc.Client, error) {
+		return connectClient(ctx, opts)
+	})
+	go func() {
+		if _, err := r.ready(ctx); err != nil {
+			r.noteDialError(err)
+		}
+	}()
+	return r, func() { _ = r.Close() }, nil
+}
+
 func connectClient(ctx context.Context, opts ConnectOptions) (*ipc.Client, error) {
 	if opts.Home != "" {
 		_ = os.Setenv("GROK_SUPERVISOR_HOME", opts.Home)
@@ -216,7 +233,14 @@ func startDesktop() error {
 	}
 	cmd := desktopCommand(exe)
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start %s desktop: %w", exe, err)
+		retry := desktopCommand(exe)
+		if !relaxDetach(retry) {
+			return fmt.Errorf("start %s desktop: %w", exe, err)
+		}
+		if err2 := retry.Start(); err2 != nil {
+			return fmt.Errorf("start %s desktop: %w", exe, err2)
+		}
+		cmd = retry
 	}
 	if cmd.Process != nil {
 		_ = cmd.Process.Release()
@@ -225,7 +249,8 @@ func startDesktop() error {
 }
 
 func desktopCommand(exe string) *exec.Cmd {
-	cmd := exec.Command(exe, "desktop")
+	// nil 标准流在当前 Go 接到 NUL，不继承调用方的 MCP 管道。
+	cmd := exec.Command(exe, "desktop", "--background")
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil

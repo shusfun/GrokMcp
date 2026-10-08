@@ -27,7 +27,9 @@ func main() {
 			os.Exit(1)
 		}
 	case "mcp":
-		backend, cleanup, err := appruntime.Connect(ctx, appruntime.ConnectOptions{})
+		// 先接住 stdio，再在后台拨 Supervisor。窗口创建不能挡住 initialize。
+		// Codex 在 initialize 成功后取消 MCP 进程是宿主行为，这里不处理。
+		backend, cleanup, err := appruntime.Attach(ctx, appruntime.ConnectOptions{})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -71,7 +73,7 @@ func main() {
 			os.Exit(1)
 		}
 		defer cleanup()
-		if err := app.Run(backend); err != nil {
+		if err := app.Run(backend, app.RunOptions{Background: backgroundDesktop(tailArgs())}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -79,6 +81,22 @@ func main() {
 		fmt.Fprintf(os.Stderr, "usage: %s [desktop|mcp|mcp-config|doctor]\n", os.Args[0])
 		os.Exit(2)
 	}
+}
+
+func tailArgs() []string {
+	if len(os.Args) < 3 {
+		return nil
+	}
+	return os.Args[2:]
+}
+
+func backgroundDesktop(args []string) bool {
+	for _, arg := range args {
+		if arg == app.BackgroundArg {
+			return true
+		}
+	}
+	return false
 }
 
 func printDiagnose(d protocol.DiagnoseResult) {
