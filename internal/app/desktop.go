@@ -9,12 +9,14 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/updater"
 	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 	"grokmcp/internal/core"
+	"grokmcp/internal/foreground"
 	"grokmcp/internal/notify"
 	"grokmcp/internal/paths"
 	"grokmcp/internal/protocol"
@@ -117,6 +119,7 @@ func Run(backend core.Backend, opts RunOptions) error {
 	// 后台实例从创建起就不带 WS_VISIBLE，避免 MCP 冷启动抢前台。
 	if opts.Background {
 		winOpts.Hidden = true
+		go foreground.YieldLoop(4 * time.Second)
 	}
 	window = app.Window.NewWithOptions(winOpts)
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {

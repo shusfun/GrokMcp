@@ -14,6 +14,7 @@ import (
 	"grokmcp/internal/ipc"
 
 	"grokmcp/internal/core"
+	"grokmcp/internal/foreground"
 	"grokmcp/internal/integration"
 	"grokmcp/internal/paths"
 )
@@ -232,12 +233,13 @@ func startDesktop() error {
 		return fmt.Errorf("resolve supervisor executable: %w", err)
 	}
 	cmd := desktopCommand(exe)
-	if err := cmd.Start(); err != nil {
+	err = foreground.LockDuring(func() error { return cmd.Start() })
+	if err != nil {
 		retry := desktopCommand(exe)
 		if !relaxDetach(retry) {
 			return fmt.Errorf("start %s desktop: %w", exe, err)
 		}
-		if err2 := retry.Start(); err2 != nil {
+		if err2 := foreground.LockDuring(func() error { return retry.Start() }); err2 != nil {
 			return fmt.Errorf("start %s desktop: %w", exe, err2)
 		}
 		cmd = retry
