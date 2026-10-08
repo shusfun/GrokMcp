@@ -143,10 +143,7 @@ func Run(backend core.Backend, opts RunOptions) error {
 	if runtime.GOOS == "darwin" {
 		tray.SetLabel("Grok")
 	}
-	tray.OnClick(func() {
-		window.Show()
-		window.Focus()
-	})
+	tray.OnClick(func() { host.showMain() })
 
 	backend.Subscribe(func(ev protocol.Event) {
 		app.Event.Emit("jobs:changed", ev)
