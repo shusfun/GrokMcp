@@ -32,7 +32,7 @@ func main() {
 	case "mcp":
 		// 先接住 stdio，再在后台拨 Supervisor。窗口创建不能挡住 initialize。
 		// Codex 在 initialize 成功后取消 MCP 进程是宿主行为，这里不处理。
-		go foreground.YieldLoop(4 * time.Second)
+		foreground.StartYield(4 * time.Second)
 		backend, cleanup, err := appruntime.Attach(ctx, appruntime.ConnectOptions{})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -73,7 +73,7 @@ func main() {
 	case "desktop", "app":
 		background := backgroundDesktop(tailArgs())
 		if background {
-			go foreground.YieldLoop(4 * time.Second)
+			foreground.StartYield(4 * time.Second)
 		}
 		backend, cleanup, err := appruntime.Open(ctx, appruntime.Options{})
 		if err != nil {

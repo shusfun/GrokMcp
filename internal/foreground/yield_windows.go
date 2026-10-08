@@ -15,9 +15,12 @@ const (
 	lsfwUnlock = 2
 )
 
-// YieldIfCurrent 在本进程已成前台时，把前台交回父进程或上一扇可见窗口。
-// 后台 MCP 和隐藏桌面用它避免抢走聊天窗口。
+// YieldIfCurrent 在本进程已成前台、且用户还没要求显示时，把前台交回其他窗口。
+// 别人已经是前台时直接返回。找不到可交回的窗口时，只隐藏自己的前台窗口。
 func YieldIfCurrent() {
+	if !shouldYieldOwnForeground(userShown()) {
+		return
+	}
 	user32 := windows.NewLazySystemDLL("user32.dll")
 	getFG := user32.NewProc("GetForegroundWindow")
 	getPID := user32.NewProc("GetWindowThreadProcessId")
@@ -32,24 +35,49 @@ func YieldIfCurrent() {
 	if owner != self {
 		return
 	}
-	if hwnd := visibleWindowOf(parentPID(self)); hwnd != 0 {
-		setFG.Call(hwnd)
+	target := visibleWindowOf(parentPID(self))
+	if target == 0 {
+		target = nextVisibleWindow(fg, self)
+	}
+	if !shouldYieldOwnForeground(userShown()) {
 		return
 	}
-	if hwnd := nextVisibleWindow(fg, self); hwnd != 0 {
-		setFG.Call(hwnd)
+	if target != 0 {
+		setFG.Call(target)
 		return
 	}
-	user32.NewProc("ShowWindow").Call(fg, uintptr(windows.SW_HIDE))
+	if shouldHideOwnForeground(userShown(), false) {
+		user32.NewProc("ShowWindow").Call(fg, uintptr(windows.SW_HIDE))
+	}
 }
 
-// YieldLoop 在窗口创建期间反复交回前台。显式打开窗口前应停止调用。
-func YieldLoop(d time.Duration) {
-	deadline := time.Now().Add(d)
-	for time.Now().Before(deadline) {
-		YieldIfCurrent()
-		time.Sleep(50 * time.Millisecond)
+// StartYield 在后台启动期间交回前台。重复调用不会再开一条循环。
+// 用户显式打开时必须先 StopForUserShow，否则循环会把刚显示的窗口藏起来。
+func StartYield(d time.Duration) {
+	yieldState.mu.Lock()
+	if yieldState.userShown || yieldState.stop != nil {
+		yieldState.mu.Unlock()
+		return
 	}
+	ch := make(chan struct{})
+	yieldState.stop = ch
+	yieldState.mu.Unlock()
+	go func() {
+		deadline := time.Now().Add(d)
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ch:
+				return
+			case <-ticker.C:
+				if time.Now().After(deadline) {
+					return
+				}
+				YieldIfCurrent()
+			}
+		}
+	}()
 }
 
 // LockDuring 在启动子进程期间禁止新进程调用 SetForegroundWindow。

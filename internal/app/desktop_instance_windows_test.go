@@ -106,6 +106,129 @@ func TestDesktopSecondLaunchAndMCPClients(t *testing.T) {
 	}
 }
 
+func TestMCPBackgroundThenExplicitShow(t *testing.T) {
+	homeDuring := t.TempDir()
+	homeAfter := t.TempDir()
+	exe := filepath.Join(t.TempDir(), "GrokMcp.exe")
+	build := exec.Command("go", "build", "-o", exe, "-ldflags", "-H windowsgui -s -w", "./cmd/grokmcp")
+	build.Dir = filepath.Join("..", "..")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOENV=./go.env")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	t.Run("during-yield", func(t *testing.T) {
+		assertExplicitShowAfterMCP(t, exe, homeDuring, 800*time.Millisecond)
+	})
+	t.Run("after-yield", func(t *testing.T) {
+		assertExplicitShowAfterMCP(t, exe, homeAfter, 5*time.Second)
+	})
+}
+
+func assertExplicitShowAfterMCP(t *testing.T, exe, home string, wait time.Duration) {
+	t.Helper()
+	mcp := exec.Command(exe, "mcp")
+	mcp.Env = append(os.Environ(), "GROK_SUPERVISOR_HOME="+home)
+	stdin, err := mcp.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		for _, pid := range childPIDs(uint32(mcp.Process.Pid)) {
+			killTree(int(pid))
+		}
+		killTree(mcp.Process.Pid)
+	})
+	time.Sleep(wait)
+	desktop := childPID(uint32(mcp.Process.Pid))
+	if desktop == 0 {
+		t.Fatal("mcp did not start a background desktop")
+	}
+	openExplicit(t, exe, home)
+	if !waitVisible(desktop, 8*time.Second) {
+		t.Fatal("explicit launch did not show the background desktop")
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if !visibleTitle(desktop) {
+		t.Fatal("window was hidden again while the user had asked to show it")
+	}
+	hideMain(desktop)
+	if waitVisible(desktop, 300*time.Millisecond) {
+		t.Fatal("window stayed visible after hide")
+	}
+	openExplicit(t, exe, home)
+	if !waitVisible(desktop, 8*time.Second) {
+		t.Fatal("explicit launch after hide did not show the window")
+	}
+}
+
+func openExplicit(t *testing.T, exe, home string) {
+	t.Helper()
+	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(), "GROK_SUPERVISOR_HOME="+home)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("explicit launch exit: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		killTree(cmd.Process.Pid)
+		t.Fatal("explicit launch did not exit")
+	}
+}
+
+func childPIDs(parent uint32) []uint32 {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer windows.CloseHandle(snap)
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	if err := windows.Process32First(snap, &entry); err != nil {
+		return nil
+	}
+	var out []uint32
+	for {
+		if entry.ParentProcessID == parent {
+			out = append(out, entry.ProcessID)
+		}
+		if err := windows.Process32Next(snap, &entry); err != nil {
+			break
+		}
+	}
+	return out
+}
+
+func childPID(parent uint32) uint32 {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return 0
+	}
+	defer windows.CloseHandle(snap)
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	if err := windows.Process32First(snap, &entry); err != nil {
+		return 0
+	}
+	for {
+		if entry.ParentProcessID == parent {
+			return entry.ProcessID
+		}
+		if err := windows.Process32Next(snap, &entry); err != nil {
+			return 0
+		}
+	}
+}
+
 func processAlive(pid int) bool {
 	p, err := os.FindProcess(pid)
 	if err != nil {
@@ -123,6 +246,10 @@ func processAlive(pid int) bool {
 
 func killTree(pid int) {
 	_ = exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && processAlive(pid) {
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func waitVisible(pid uint32, d time.Duration) bool {

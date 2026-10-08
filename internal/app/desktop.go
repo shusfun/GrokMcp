@@ -65,8 +65,11 @@ func Run(backend core.Backend, opts RunOptions) error {
 				if window == nil || !ActivateOnSecondInstance(data.Args) {
 					return
 				}
+				// 先停掉后台交回，再显示。否则 YieldIfCurrent 会把刚打开的窗口藏起来。
+				foreground.StopForUserShow()
 				window.Show()
 				window.Focus()
+				foreground.ShowExplicit(window.NativeWindow())
 			},
 		},
 		Services: []application.Service{
@@ -119,7 +122,7 @@ func Run(backend core.Backend, opts RunOptions) error {
 	// 后台实例从创建起就不带 WS_VISIBLE，避免 MCP 冷启动抢前台。
 	if opts.Background {
 		winOpts.Hidden = true
-		go foreground.YieldLoop(4 * time.Second)
+		foreground.StartYield(4 * time.Second)
 	}
 	window = app.Window.NewWithOptions(winOpts)
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
@@ -176,8 +179,10 @@ type trayHost struct {
 }
 
 func (h *trayHost) showMain() {
+	foreground.StopForUserShow()
 	h.window.Show()
 	h.window.Focus()
+	foreground.ShowExplicit(h.window.NativeWindow())
 }
 
 func (h *trayHost) refresh() {
